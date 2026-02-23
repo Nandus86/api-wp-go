@@ -52,6 +52,7 @@ func (h *Handler) Router() http.Handler {
 	r.Put("/device/{id}/rename", h.RenameDevice)
 	r.Get("/device/{id}/qr", h.GetQR)
 	r.Get("/device/{id}/status", h.GetStatus)
+	r.Post("/message/send", h.SendText)
 	r.Post("/message/interactive/button", h.SendInteractiveButton)
 
 	r.Get("/docs/*", httpSwagger.Handler(
@@ -248,6 +249,41 @@ func (h *Handler) SendInteractiveButton(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
+
+	payloadBytes, err := json.Marshal(req)
+	if err != nil {
+		http.Error(w, "Failed to encode message to queue", http.StatusInternalServerError)
+		return
+	}
+
+	err = h.rmqClient.Publish(r.Context(), "send_message_queue", payloadBytes)
+	if err != nil {
+		http.Error(w, "Failed to enqueue message", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "queued"})
+}
+
+// SendText sends a plain text WhatsApp message via Queue
+// @Summary Send a text message
+// @Description Sends a plain text message (Queued)
+// @Tags message
+// @Accept json
+// @Produce json
+// @Param request body SendMessageRequest true "Message Request"
+// @Success 200 {object} map[string]string
+// @Router /message/send [post]
+func (h *Handler) SendText(w http.ResponseWriter, r *http.Request) {
+	var req SendMessageRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Forcing type to empty so builder creates a text message
+	req.Type = ""
 
 	payloadBytes, err := json.Marshal(req)
 	if err != nil {

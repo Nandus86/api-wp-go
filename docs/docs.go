@@ -169,6 +169,46 @@ const docTemplate = `{
                 }
             }
         },
+        "/message/send": {
+            "post": {
+                "description": "Enqueues a plain text message to be sent asynchronously via RabbitMQ. Supports both 'phone' and 'number' as well as 'message' and 'text' aliases.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "message"
+                ],
+                "summary": "Send a text message",
+                "parameters": [
+                    {
+                        "description": "Text Message Payload",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.SendMessageRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Message queued",
+                        "schema": {
+                            "$ref": "#/definitions/api.QueuedResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request body"
+                    },
+                    "500": {
+                        "description": "Failed to enqueue message"
+                    }
+                }
+            }
+        },
         "/message/interactive/button": {
             "post": {
                 "description": "Enqueues an interactive button message to be sent asynchronously via RabbitMQ. The message uses WhatsApp NativeFlowMessage for rendering clickable buttons on the recipient's phone. Supports both 'phone' and 'number' field aliases.",
