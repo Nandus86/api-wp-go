@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -49,6 +50,53 @@ func (b *MessageBuilder) WithButtons(text string, footer string, title string, b
 			Name:             proto.String("quick_reply"),
 			ButtonParamsJSON: proto.String(paramsJSON),
 		})
+	}
+
+	msgVersion := int32(1)
+
+	interactiveMsg := &waE2E.InteractiveMessage{
+		Body: &waE2E.InteractiveMessage_Body{
+			Text: proto.String(text),
+		},
+		Footer: &waE2E.InteractiveMessage_Footer{
+			Text: proto.String(footer),
+		},
+		Header: &waE2E.InteractiveMessage_Header{
+			Title:              proto.String(title),
+			HasMediaAttachment: proto.Bool(false),
+		},
+		InteractiveMessage: &waE2E.InteractiveMessage_NativeFlowMessage_{
+			NativeFlowMessage: &waE2E.InteractiveMessage_NativeFlowMessage{
+				Buttons:        nfButtons,
+				MessageVersion: &msgVersion,
+			},
+		},
+	}
+
+	b.msg.Conversation = nil
+	b.msg.InteractiveMessage = interactiveMsg
+	return b
+}
+
+func (b *MessageBuilder) WithCopyButton(text string, footer string, title string, copyText string, copyCode string) *MessageBuilder {
+	if copyText == "" {
+		copyText = "Copy"
+	}
+
+	params := map[string]string{
+		"display_text": copyText,
+		"id":           copyCode, // the actual content copied to clipboard
+		"copy_code":    copyCode,
+	}
+
+	paramsJSONBytes, _ := json.Marshal(params)
+	paramsJSON := string(paramsJSONBytes)
+
+	nfButtons := []*waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton{
+		{
+			Name:             proto.String("cta_copy"),
+			ButtonParamsJSON: proto.String(paramsJSON),
+		},
 	}
 
 	msgVersion := int32(1)

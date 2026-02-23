@@ -18,29 +18,42 @@ import (
 
 type SendMessageRequest struct {
 	DeviceID   string   `json:"device_id,omitempty"`
-	Phone      string   `json:"phone,omitempty"`
-	Number     string   `json:"number,omitempty"`     // Uazapi alias for Phone
+	Number     string   `json:"number,omitempty"`
+	Phone      string   `json:"phone,omitempty" swaggerignore:"true"`     // Uazapi alias for Number
 	Message    string   `json:"message,omitempty"`
-	Text       string   `json:"text,omitempty"`       // Uazapi alias for Message
+	Text       string   `json:"text,omitempty" swaggerignore:"true"`       // Uazapi alias for Message
 	Footer     string   `json:"footer,omitempty"`
-	FooterText string   `json:"footerText,omitempty"` // Uazapi alias for Footer
+	FooterText string   `json:"footerText,omitempty" swaggerignore:"true"` // Uazapi alias for Footer
 	Title      string   `json:"title,omitempty"`
 	Type       string   `json:"type,omitempty"`       // button, list
 	Buttons    []string `json:"buttons,omitempty"`
-	Choices    []string `json:"choices,omitempty"`    // Uazapi alias for Buttons
-	ListButton string   `json:"listButton,omitempty"` // for list button text
+	Choices    []string `json:"choices,omitempty" swaggerignore:"true"`    // Uazapi alias for Buttons
+	ListButton string   `json:"listButton,omitempty" swaggerignore:"true"` // for list button text
 }
 
 type SendMediaRequest struct {
 	DeviceID   string `json:"device_id"`
-	Phone      string `json:"phone,omitempty"`
 	Number     string `json:"number,omitempty"`
-	MediaURL   string `json:"media_url"`
-	Type       string `json:"type"` // image, video, document, audio
+	Phone      string `json:"phone,omitempty" swaggerignore:"true"` // Uazapi alias for Number
+	MediaURL   string `json:"media_url,omitempty"` // Public URL to download the media from
+	Base64     string `json:"base64,omitempty"`    // Base64 encoded media string (e.g. data:image/png;base64,...)
+	Type       string `json:"type"`                // image, video, document, audio
 	Caption    string `json:"caption,omitempty"`
-	Text       string `json:"text,omitempty"` // Uazapi alias for Caption
+	Text       string `json:"text,omitempty" swaggerignore:"true"` // Uazapi alias for Caption
 	MimeType   string `json:"mimetype,omitempty"`
 	FileName   string `json:"fileName,omitempty"`
+}
+
+type SendCopyButtonRequest struct {
+	DeviceID string `json:"device_id"`
+	Number   string `json:"number,omitempty"`
+	Phone    string `json:"phone,omitempty" swaggerignore:"true"` // Alias
+	Message  string `json:"message,omitempty"`
+	Text     string `json:"text,omitempty" swaggerignore:"true"` // Alias
+	Title    string `json:"title,omitempty"`
+	Footer   string `json:"footer,omitempty"`
+	CopyCode string `json:"copy_code"` // The actual content to be copied (e.g. PIX payload)
+	CopyText string `json:"copy_text"` // The button display text (e.g. "Copy PIX")
 }
 
 type Handler struct {
@@ -66,6 +79,7 @@ func (h *Handler) Router() http.Handler {
 	r.Get("/device/{id}/status", h.GetStatus)
 	r.Post("/message/send", h.SendText)
 	r.Post("/message/interactive/button", h.SendInteractiveButton)
+	r.Post("/message/interactive/copy", h.SendInteractiveCopyButton)
 	r.Post("/message/media", h.SendMedia)
 
 	r.Get("/docs/*", httpSwagger.Handler(
@@ -337,6 +351,39 @@ func (h *Handler) SendMedia(w http.ResponseWriter, r *http.Request) {
 	}
 
 	err = h.rmqClient.Publish(r.Context(), "send_media_queue", payloadBytes)
+	if err != nil {
+		http.Error(w, "Failed to enqueue message", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "queued"})
+}
+
+// SendInteractiveCopyButton sends a WhatsApp interactive copy button message via Queue
+// @Summary Send an interactive copy button (eg. Copy PIX)
+// @Description Sends an interactive button message specifically designed to copy text (Queued)
+// @Tags message
+// @Accept json
+// @Produce json
+// @Param request body SendCopyButtonRequest true "Copy Button Request"
+// @Success 200 {object} map[string]string
+// @Router /message/interactive/copy [post]
+func (h *Handler) SendInteractiveCopyButton(w http.ResponseWriter, r *http.Request) {
+	var req SendCopyButtonRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	payloadBytes, err := json.Marshal(req)
+	if err != nil {
+		http.Error(w, "Failed to encode message to queue", http.StatusInternalServerError)
+		return
+	}
+
+	// Reusing the standard send_message_queue as it's lightweight JSON
+	err = h.rmqClient.Publish(r.Context(), "send_message_queue", payloadBytes)
 	if err != nil {
 		http.Error(w, "Failed to enqueue message", http.StatusInternalServerError)
 		return

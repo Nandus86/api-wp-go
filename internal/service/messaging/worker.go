@@ -14,8 +14,8 @@ import (
 
 type SendMessagePayload struct {
 	DeviceID   string   `json:"device_id"`
-	Phone      string   `json:"phone,omitempty"`
 	Number     string   `json:"number,omitempty"`
+	Phone      string   `json:"phone,omitempty"`
 	Message    string   `json:"message,omitempty"`
 	Text       string   `json:"text,omitempty"`
 	Type       string   `json:"type,omitempty"`
@@ -24,6 +24,8 @@ type SendMessagePayload struct {
 	FooterText string   `json:"footerText,omitempty"`
 	Buttons    []string `json:"buttons,omitempty"`
 	Choices    []string `json:"choices,omitempty"`
+	CopyCode   string   `json:"copy_code,omitempty"`
+	CopyText   string   `json:"copy_text,omitempty"`
 }
 
 type Worker struct {
@@ -57,8 +59,8 @@ func (w *Worker) handleSendMessage(body []byte) error {
 	}
 
 	// Resolve aliases (Uazapi compatibility)
-	if payload.Phone == "" && payload.Number != "" {
-		payload.Phone = payload.Number
+	if payload.Number == "" && payload.Phone != "" {
+		payload.Number = payload.Phone
 	}
 	if payload.Message == "" && payload.Text != "" {
 		payload.Message = payload.Text
@@ -81,7 +83,7 @@ func (w *Worker) handleSendMessage(body []byte) error {
 		return fmt.Errorf("device not connected")
 	}
 
-	remoteJID, err := types.ParseJID(payload.Phone + "@s.whatsapp.net")
+	remoteJID, err := types.ParseJID(payload.Number + "@s.whatsapp.net")
 	if err != nil {
 		w.logger.Error("Invalid phone number format", zap.Error(err))
 		return nil
@@ -89,7 +91,9 @@ func (w *Worker) handleSendMessage(body []byte) error {
 
 	builder := NewMessageBuilder(client, remoteJID.String())
 
-	if payload.Type == "button" {
+	if payload.CopyCode != "" {
+		builder.WithCopyButton(payload.Message, payload.Footer, payload.Title, payload.CopyText, payload.CopyCode)
+	} else if payload.Type == "button" {
 		builder.WithButtons(payload.Message, payload.Footer, payload.Title, payload.Buttons)
 	} else {
 		builder.WithText(payload.Message)

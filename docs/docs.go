@@ -408,6 +408,53 @@ const docTemplate = `{
                     "example": ["Sim", "Nao", "Talvez"]
                 }
             }
+        },
+        "api.SendMediaRequest": {
+            "type": "object",
+            "required": ["device_id", "type"],
+            "properties": {
+                "device_id": {
+                    "type": "string",
+                    "description": "ID of the connected device to send from",
+                    "example": "2a7f8a3e-343f-4d8b-ad3c-ab375af2dfda"
+                },
+                "number": {
+                    "type": "string",
+                    "description": "Recipient phone number (DDI+DDD+number, no + sign). Alias: 'phone'",
+                    "example": "554399284670"
+                },
+                "media_url": {
+                    "type": "string",
+                    "description": "Public URL where the media can be downloaded from. Required if base64 is empty.",
+                    "example": "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf"
+                },
+                "base64": {
+                    "type": "string",
+                    "description": "Base64 encoded media string (e.g. data:image/png;base64,iVBORw0KGgo...). Required if media_url is empty.",
+                    "example": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+                },
+                "type": {
+                    "type": "string",
+                    "description": "Type of media being sent",
+                    "enum": ["image", "video", "document", "audio"],
+                    "example": "document"
+                },
+                "caption": {
+                    "type": "string",
+                    "description": "Caption text attached to the media (images/videos/documents). Alias: 'text'",
+                    "example": "Segue anexo o documento solicitado"
+                },
+                "mimetype": {
+                    "type": "string",
+                    "description": "Optional custom mimetype (e.g. application/pdf)",
+                    "example": "application/pdf"
+                },
+                "fileName": {
+                    "type": "string",
+                    "description": "Optional explicit file name when type=document",
+                    "example": "relatorio.pdf"
+                }
+            }
         }
     }
 }`
