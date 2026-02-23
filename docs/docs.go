@@ -209,6 +209,46 @@ const docTemplate = `{
                 }
             }
         },
+        "/message/media": {
+            "post": {
+                "description": "Enqueues a media message (image, video, document, audio). Downloads the media from `media_url` and uploads it to WhatsApp. Mimetype is optional but recommended for documents/audio.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "message"
+                ],
+                "summary": "Send a media message",
+                "parameters": [
+                    {
+                        "description": "Media Message Payload",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.SendMediaRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Message queued",
+                        "schema": {
+                            "$ref": "#/definitions/api.QueuedResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request body"
+                    },
+                    "500": {
+                        "description": "Failed to enqueue message"
+                    }
+                }
+            }
+        },
         "/message/interactive/button": {
             "post": {
                 "description": "Enqueues an interactive button message to be sent asynchronously via RabbitMQ. The message uses WhatsApp NativeFlowMessage for rendering clickable buttons on the recipient's phone. Supports both 'phone' and 'number' field aliases.",

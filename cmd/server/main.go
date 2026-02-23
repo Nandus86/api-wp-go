@@ -49,6 +49,9 @@ func main() {
     msgWorker := messaging.NewWorker(rmqClient, manager, logger.Log)
     msgWorker.Start()
 
+    mediaWorker := messaging.NewMediaWorker(rmqClient, manager, logger.Log)
+    mediaWorker.Start()
+
     whWorker := webhook.NewWorker(rmqClient, logger.Log, cfg.WebhookURL)
     whWorker.Start()
 

@@ -116,6 +116,70 @@ func (b *MessageBuilder) WithList(text string, footer string, title string, butt
 	return b
 }
 
+func (b *MessageBuilder) WithMedia(resp whatsmeow.UploadResponse, mediaType whatsmeow.MediaType, mimeType, fileName, caption string) *MessageBuilder {
+	switch mediaType {
+	case whatsmeow.MediaImage:
+		if mimeType == "" {
+			mimeType = "image/jpeg"
+		}
+		b.msg.ImageMessage = &waE2E.ImageMessage{
+			URL:           proto.String(resp.URL),
+			DirectPath:    proto.String(resp.DirectPath),
+			MediaKey:      resp.MediaKey,
+			FileEncSHA256: resp.FileEncSHA256,
+			FileSHA256:    resp.FileSHA256,
+			FileLength:    proto.Uint64(uint64(resp.FileLength)),
+			Mimetype:      proto.String(mimeType),
+			Caption:       proto.String(caption),
+		}
+	case whatsmeow.MediaVideo:
+		if mimeType == "" {
+			mimeType = "video/mp4"
+		}
+		b.msg.VideoMessage = &waE2E.VideoMessage{
+			URL:           proto.String(resp.URL),
+			DirectPath:    proto.String(resp.DirectPath),
+			MediaKey:      resp.MediaKey,
+			FileEncSHA256: resp.FileEncSHA256,
+			FileSHA256:    resp.FileSHA256,
+			FileLength:    proto.Uint64(uint64(resp.FileLength)),
+			Mimetype:      proto.String(mimeType),
+			Caption:       proto.String(caption),
+		}
+	case whatsmeow.MediaDocument:
+        if fileName == "" {
+            fileName = "document"
+        }
+		b.msg.DocumentMessage = &waE2E.DocumentMessage{
+			URL:           proto.String(resp.URL),
+			DirectPath:    proto.String(resp.DirectPath),
+			MediaKey:      resp.MediaKey,
+			FileEncSHA256: resp.FileEncSHA256,
+			FileSHA256:    resp.FileSHA256,
+			FileLength:    proto.Uint64(uint64(resp.FileLength)),
+			Mimetype:      proto.String(mimeType),
+			FileName:      proto.String(fileName),
+            Caption:       proto.String(caption),
+		}
+	case whatsmeow.MediaAudio:
+		if mimeType == "" {
+			mimeType = "audio/ogg; codecs=opus"
+		}
+		b.msg.AudioMessage = &waE2E.AudioMessage{
+			URL:           proto.String(resp.URL),
+			DirectPath:    proto.String(resp.DirectPath),
+			MediaKey:      resp.MediaKey,
+			FileEncSHA256: resp.FileEncSHA256,
+			FileSHA256:    resp.FileSHA256,
+			FileLength:    proto.Uint64(uint64(resp.FileLength)),
+			Mimetype:      proto.String(mimeType),
+			PTT:           proto.Bool(true), // Treating Audio as PTT by default for standard voice messages
+		}
+	}
+	b.msg.Conversation = nil
+	return b
+}
+
 func splitChoice(choice string) []string {
 	// Simple split by pipe
 	var parts []string

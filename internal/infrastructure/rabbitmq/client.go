@@ -66,6 +66,10 @@ func (c *Client) Connect() error {
 	if err != nil {
 		return err
 	}
+	_, err = c.ch.QueueDeclare("send_media_queue", true, false, false, false, nil)
+	if err != nil {
+		return err
+	}
 
 	return nil
 }

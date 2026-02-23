@@ -31,6 +31,18 @@ type SendMessageRequest struct {
 	ListButton string   `json:"listButton,omitempty"` // for list button text
 }
 
+type SendMediaRequest struct {
+	DeviceID   string `json:"device_id"`
+	Phone      string `json:"phone,omitempty"`
+	Number     string `json:"number,omitempty"`
+	MediaURL   string `json:"media_url"`
+	Type       string `json:"type"` // image, video, document, audio
+	Caption    string `json:"caption,omitempty"`
+	Text       string `json:"text,omitempty"` // Uazapi alias for Caption
+	MimeType   string `json:"mimetype,omitempty"`
+	FileName   string `json:"fileName,omitempty"`
+}
+
 type Handler struct {
 	manager   *whatsapp.MultiClientManager
 	rmqClient *rabbitmq.Client
@@ -54,6 +66,7 @@ func (h *Handler) Router() http.Handler {
 	r.Get("/device/{id}/status", h.GetStatus)
 	r.Post("/message/send", h.SendText)
 	r.Post("/message/interactive/button", h.SendInteractiveButton)
+	r.Post("/message/media", h.SendMedia)
 
 	r.Get("/docs/*", httpSwagger.Handler(
 		httpSwagger.URL("/docs/doc.json"), //The url pointing to API definition
@@ -292,6 +305,38 @@ func (h *Handler) SendText(w http.ResponseWriter, r *http.Request) {
 	}
 
 	err = h.rmqClient.Publish(r.Context(), "send_message_queue", payloadBytes)
+	if err != nil {
+		http.Error(w, "Failed to enqueue message", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "queued"})
+}
+
+// SendMedia sends a media WhatsApp message via Queue
+// @Summary Send a media message (image, video, document, audio)
+// @Description Sends a media message (Queued)
+// @Tags message
+// @Accept json
+// @Produce json
+// @Param request body SendMediaRequest true "Media Message Request"
+// @Success 200 {object} map[string]string
+// @Router /message/media [post]
+func (h *Handler) SendMedia(w http.ResponseWriter, r *http.Request) {
+	var req SendMediaRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	payloadBytes, err := json.Marshal(req)
+	if err != nil {
+		http.Error(w, "Failed to encode message to queue", http.StatusInternalServerError)
+		return
+	}
+
+	err = h.rmqClient.Publish(r.Context(), "send_media_queue", payloadBytes)
 	if err != nil {
 		http.Error(w, "Failed to enqueue message", http.StatusInternalServerError)
 		return
