@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WhatsMeow Basileia - Connect</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <style>
+        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; background: #f0f2f5; }
+        .container { background: white; padding: 2rem; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); text-align: center; }
+        #qrcode { margin: 2rem auto; }
+        button { padding: 10px 20px; background: #25D366; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; }
+        button:disabled { background: #ccc; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Connect WhatsApp</h1>
+        <div id="status">Status: Disconnected</div>
+        <div id="qrcode"></div>
+        <button id="connectBtn" onclick="createSession()">New Session</button>
+    </div>
+
+    <script>
+        let eventSource;
+
+        async function createSession() {
+            const btn = document.getElementById('connectBtn');
+            btn.disabled = true;
+            document.getElementById('status').innerText = "Status: Initializing...";
+            
+            try {
+                const res = await fetch('/device', { method: 'POST' });
+                const data = await res.json();
+                const deviceID = data.device_id;
+                
+                document.getElementById('status').innerText = "Status: Waiting for QR...";
+                startQRStream(deviceID);
+            } catch (e) {
+                console.error(e);
+                btn.disabled = false;
+            }
+        }
+
+        function startQRStream(deviceID) {
+            if (eventSource) eventSource.close();
+            
+            eventSource = new EventSource(`/device/${deviceID}/qr`);
+            
+            eventSource.onmessage = function(event) {
+                console.log("QR Code received", event.data);
+                document.getElementById('qrcode').innerHTML = "";
+                new QRCode(document.getElementById('qrcode'), event.data);
+                document.getElementById('status').innerText = "Status: Scan QR";
+            };
+            
+            eventSource.onerror = function(err) {
+                console.error("EventSource failed:", err);
+                eventSource.close();
+                // Check if connected
+                checkStatus(deviceID);
+            };
+        }
+
+        async function checkStatus(deviceID) {
+            const res = await fetch(`/device/${deviceID}/status`);
+            const data = await res.json();
+            if (data.status === 'connected') {
+                document.getElementById('status').innerText = "Status: Connected!";
+                document.getElementById('qrcode').innerHTML = "✅";
+            } else {
+                document.getElementById('status').innerText = "Status: Connection Failed or Timeout";
+                document.getElementById('connectBtn').disabled = false;
+            }
+        }
+    </script>
+</body>
+</html>

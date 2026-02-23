@@ -1,0 +1,114 @@
+basePath: /api
+definitions:
+  api.SendMessageRequest:
+    properties:
+      buttons:
+        items:
+          type: string
+        type: array
+      device_id:
+        type: string
+      footer:
+        type: string
+      message:
+        type: string
+      phone:
+        type: string
+    type: object
+host: localhost:3179
+info:
+  contact: {}
+  description: API for WhatsApp automation using WhatsMeow.
+  title: WhatsMeow Basileia API
+  version: "1.0"
+paths:
+  /device:
+    get:
+      description: Returns a list of all active device IDs
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              type: string
+            type: array
+      summary: List devices
+      tags:
+      - device
+    post:
+      description: Generates a new device ID and initializes a client
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Create a new device
+      tags:
+      - device
+  /device/{id}/qr:
+    get:
+      description: Connects to SSE stream to receive QR codes for pairing
+      parameters:
+      - description: Device ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - text/event-stream
+      responses: {}
+      summary: Get QR code stream
+      tags:
+      - device
+  /device/{id}/status:
+    get:
+      description: Returns the connection status of the device
+      parameters:
+      - description: Device ID (JID)
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get device status
+      tags:
+      - device
+  /message/send:
+    post:
+      consumes:
+      - application/json
+      description: Sends a text message to a specific phone number
+      parameters:
+      - description: Message Request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.SendMessageRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Send a message
+      tags:
+      - message
+swagger: "2.0"

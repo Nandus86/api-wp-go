@@ -1,0 +1,120 @@
+services:
+  app:
+    build: .
+    container_name: whatsmeow-app
+    # Removed direct port mapping to 8179 to force all traffic through Nginx
+    environment:
+      - HTTP_PORT=8080
+      - DB_DIALECT=postgres
+      - DB_ADDRESS=postgres://whatsmeow:securepassword@postgres:5432/whatsmeow?sslmode=disable
+      - REDIS_URL=redis:6379
+      - RABBITMQ_URL=amqp://whatsmeow:securepassword@rabbitmq:5672/
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=whatsmeowAdmin
+      - MINIO_SECRET_KEY=securepassword
+      - MINIO_USE_SSL=false
+      - WEBHOOK_URL= # Desativado até configurar o n8n. Ex: http://host.docker.internal:5678/webhook/whatsmeow
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - whatsmeow-net
+  frontend:
+    build: ./frontend
+    container_name: whatsmeow-frontend
+    ports:
+      - "3179:80" # apiwp.nandus.com.br
+      - "8179:80" # apiwpb.nandus.com.br
+    depends_on:
+      - app
+    networks:
+      - whatsmeow-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: whatsmeow-redis
+    ports:
+      - "16379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    networks:
+      - whatsmeow-net
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: whatsmeow-rabbitmq
+    environment:
+      - RABBITMQ_DEFAULT_USER=whatsmeow
+      - RABBITMQ_DEFAULT_PASS=securepassword
+    ports:
+      - "5675:5672" # Mensageria AMQP
+      - "15675:15672" # Painel Management
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    restart: unless-stopped
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    networks:
+      - whatsmeow-net
+
+  minio:
+    image: minio/minio:latest
+    container_name: whatsmeow-minio
+    environment:
+      - MINIO_ROOT_USER=whatsmeowAdmin
+      - MINIO_ROOT_PASSWORD=securepassword
+    command: server /data --console-address ":9001"
+    ports:
+      - "19000:9000" # API S3
+      - "19001:9001" # Web Console
+    volumes:
+      - minio_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      - whatsmeow-net
+  postgres:
+    image: postgres:15-alpine
+    container_name: whatsmeow-postgres
+    environment:
+      - POSTGRES_USER=whatsmeow
+      - POSTGRES_PASSWORD=securepassword
+      - POSTGRES_DB=whatsmeow
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5234:5432"
+    networks:
+      - whatsmeow-net
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U whatsmeow" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  whatsmeow-net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:
+  minio_data:
+
+
