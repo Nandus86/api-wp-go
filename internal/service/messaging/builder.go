@@ -85,8 +85,8 @@ func (b *MessageBuilder) WithCopyButton(text string, footer string, title string
 
 	params := map[string]string{
 		"display_text": copyText,
-		"id":           copyCode, // the actual content copied to clipboard
 		"copy_code":    copyCode,
+		"id":           copyCode,
 	}
 
 	paramsJSONBytes, _ := json.Marshal(params)
@@ -116,6 +116,7 @@ func (b *MessageBuilder) WithCopyButton(text string, footer string, title string
 			NativeFlowMessage: &waE2E.InteractiveMessage_NativeFlowMessage{
 				Buttons:        nfButtons,
 				MessageVersion: &msgVersion,
+				MessageParamsJSON: proto.String(`{"from":"api","templateId":"` + copyCode + `"}`),
 			},
 		},
 	}
