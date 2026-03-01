@@ -1,5 +1,51 @@
 basePath: /api
 definitions:
+  api.CreateDeviceRequest:
+    properties:
+      name:
+        type: string
+    type: object
+  api.SendCopyButtonRequest:
+    properties:
+      copy_code:
+        description: The actual content to be copied (e.g. PIX payload)
+        type: string
+      copy_text:
+        description: The button display text (e.g. "Copy PIX")
+        type: string
+      device_id:
+        type: string
+      footer:
+        type: string
+      message:
+        type: string
+      number:
+        type: string
+      title:
+        type: string
+    type: object
+  api.SendMediaRequest:
+    properties:
+      base64:
+        description: Base64 encoded media string (e.g. data:image/png;base64,...)
+        type: string
+      caption:
+        type: string
+      device_id:
+        type: string
+      fileName:
+        type: string
+      media_url:
+        description: Public URL to download the media from
+        type: string
+      mimetype:
+        type: string
+      number:
+        type: string
+      type:
+        description: image, video, document, audio
+        type: string
+    type: object
   api.SendMessageRequest:
     properties:
       buttons:
@@ -12,10 +58,43 @@ definitions:
         type: string
       message:
         type: string
-      phone:
+      number:
+        type: string
+      title:
+        type: string
+      type:
+        description: button, list
         type: string
     type: object
-host: localhost:3179
+  logger.LogEntry:
+    properties:
+      level:
+        type: string
+      message:
+        type: string
+      time:
+        type: string
+    type: object
+  whatsapp.Instance:
+    properties:
+      id:
+        type: string
+      jid:
+        type: string
+      name:
+        type: string
+      status:
+        type: string
+    type: object
+  whatsapp.MessageStatGroup:
+    properties:
+      count:
+        type: integer
+      direction:
+        type: string
+      hour:
+        type: string
+    type: object
 info:
   contact: {}
   description: API for WhatsApp automation using WhatsMeow.
@@ -24,7 +103,7 @@ info:
 paths:
   /device:
     get:
-      description: Returns a list of all active device IDs
+      description: Returns a list of all active instances
       produces:
       - application/json
       responses:
@@ -32,13 +111,22 @@ paths:
           description: OK
           schema:
             items:
-              type: string
+              $ref: '#/definitions/whatsapp.Instance'
             type: array
       summary: List devices
       tags:
       - device
     post:
+      consumes:
+      - application/json
       description: Generates a new device ID and initializes a client
+      parameters:
+      - description: Device Name
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.CreateDeviceRequest'
       produces:
       - application/json
       responses:
@@ -49,6 +137,27 @@ paths:
               type: string
             type: object
       summary: Create a new device
+      tags:
+      - device
+  /device/{id}:
+    delete:
+      description: Deletes an instance, terminates connection and drops metadata
+      parameters:
+      - description: Device ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Delete device
       tags:
       - device
   /device/{id}/qr:
@@ -64,6 +173,56 @@ paths:
       - text/event-stream
       responses: {}
       summary: Get QR code stream
+      tags:
+      - device
+  /device/{id}/reconnect:
+    post:
+      description: Reconnects a previously paired device
+      parameters:
+      - description: Device ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Reconnect device
+      tags:
+      - device
+  /device/{id}/rename:
+    put:
+      consumes:
+      - application/json
+      description: Updates the name of an existing device/instance
+      parameters:
+      - description: Device ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: New Device Name
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.CreateDeviceRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Rename a device
       tags:
       - device
   /device/{id}/status:
@@ -87,11 +246,26 @@ paths:
       summary: Get device status
       tags:
       - device
-  /message/send:
+  /logs:
+    get:
+      description: Returns the latest logs stored in memory
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/logger.LogEntry'
+            type: array
+      summary: Get system logs
+      tags:
+      - app
+  /message/interactive/button:
     post:
       consumes:
       - application/json
-      description: Sends a text message to a specific phone number
+      description: Sends an interactive button message (Queued)
       parameters:
       - description: Message Request
         in: body
@@ -108,7 +282,100 @@ paths:
             additionalProperties:
               type: string
             type: object
-      summary: Send a message
+      summary: Send an interactive button message
       tags:
       - message
+  /message/interactive/copy:
+    post:
+      consumes:
+      - application/json
+      description: Sends an interactive button message specifically designed to copy
+        text (Queued)
+      parameters:
+      - description: Copy Button Request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.SendCopyButtonRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Send an interactive copy button (eg. Copy PIX)
+      tags:
+      - message
+  /message/media:
+    post:
+      consumes:
+      - application/json
+      description: Sends a media message (Queued)
+      parameters:
+      - description: Media Message Request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.SendMediaRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Send a media message (image, video, document, audio)
+      tags:
+      - message
+  /message/send:
+    post:
+      consumes:
+      - application/json
+      description: Sends a plain text message (Queued)
+      parameters:
+      - description: Message Request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.SendMessageRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Send a text message
+      tags:
+      - message
+  /stats:
+    get:
+      description: Returns message volume stats per hour
+      parameters:
+      - description: Device ID to filter by
+        in: query
+        name: id
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/whatsapp.MessageStatGroup'
+            type: array
+      summary: Get statistics
+      tags:
+      - app
 swagger: "2.0"

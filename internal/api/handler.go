@@ -75,12 +75,16 @@ func (h *Handler) Router() http.Handler {
 	r.Post("/device", h.CreateDevice)
 	r.Get("/device", h.ListDevices)
 	r.Put("/device/{id}/rename", h.RenameDevice)
+	r.Delete("/device/{id}", h.DeleteDevice)
+	r.Post("/device/{id}/reconnect", h.ReconnectDevice)
 	r.Get("/device/{id}/qr", h.GetQR)
 	r.Get("/device/{id}/status", h.GetStatus)
 	r.Post("/message/send", h.SendText)
 	r.Post("/message/interactive/button", h.SendInteractiveButton)
 	r.Post("/message/interactive/copy", h.SendInteractiveCopyButton)
 	r.Post("/message/media", h.SendMedia)
+	r.Get("/logs", h.GetLogs)
+	r.Get("/stats", h.GetStats)
 
 	r.Get("/docs/*", httpSwagger.Handler(
 		httpSwagger.URL("/docs/doc.json"), //The url pointing to API definition
@@ -234,7 +238,93 @@ func (h *Handler) GetQR(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// GetStatus checks the connection status of a device
+// ReconnectDevice reconnects an offline instance without a QR code
+// @Summary Reconnect device
+// @Description Reconnects a previously paired device
+// @Tags device
+// @Produce json
+// @Param id path string true "Device ID"
+// @Success 200 {object} map[string]string
+// @Router /device/{id}/reconnect [post]
+func (h *Handler) ReconnectDevice(w http.ResponseWriter, r *http.Request) {
+	deviceID := chi.URLParam(r, "id")
+	
+	err := h.manager.Connect(r.Context(), deviceID)
+	if err != nil {
+		logger.Error("Failed to reconnect device", zap.Error(err), zap.String("device", deviceID))
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status": "success",
+	})
+}
+
+// DeleteDevice deletes a device completely
+// @Summary Delete device
+// @Description Deletes an instance, terminates connection and drops metadata
+// @Tags device
+// @Produce json
+// @Param id path string true "Device ID"
+// @Success 200 {object} map[string]string
+// @Router /device/{id} [delete]
+func (h *Handler) DeleteDevice(w http.ResponseWriter, r *http.Request) {
+	deviceID := chi.URLParam(r, "id")
+	
+	err := h.manager.DeleteInstance(deviceID)
+	if err != nil {
+		logger.Error("Failed to delete device", zap.Error(err), zap.String("device", deviceID))
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status": "success",
+	})
+}
+
+// GetLogs returns the recent system logs
+// @Summary Get system logs
+// @Description Returns the latest logs stored in memory
+// @Tags app
+// @Produce json
+// @Success 200 {array} logger.LogEntry
+// @Router /logs [get]
+func (h *Handler) GetLogs(w http.ResponseWriter, r *http.Request) {
+	logs := logger.GetRecentLogs()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(logs)
+}
+
+// GetStats returns usage statistics
+// @Summary Get statistics
+// @Description Returns message volume stats per hour
+// @Tags app
+// @Produce json
+// @Param id query string false "Device ID to filter by"
+// @Success 200 {array} whatsapp.MessageStatGroup
+// @Router /stats [get]
+func (h *Handler) GetStats(w http.ResponseWriter, r *http.Request) {
+    deviceID := r.URL.Query().Get("id")
+	stats, err := h.manager.GetMessageStats(deviceID)
+    if err != nil {
+        logger.Error("Failed to fetch stats", zap.Error(err))
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
+
+	if stats == nil {
+		stats = []whatsapp.MessageStatGroup{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(stats)
+}
+
+// GetStatus returns the current connection status of a device
 // @Summary Get device status
 // @Description Returns the connection status of the device
 // @Tags device

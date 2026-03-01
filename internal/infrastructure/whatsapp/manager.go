@@ -62,8 +62,13 @@ func NewMultiClientManager(dbDialect, dbAddress string, dispatcher *EventDispatc
             device, err := container.GetDevice(context.Background(), jid)
             if err == nil && device != nil {
                 client := whatsmeow.NewClient(device, waLog.Stdout("Client", "DEBUG", true))
+                // Attach device ID to client context or pass it somehow if needed, but here we can just capture it
                 manager.clients[instance.ID] = client
-                client.AddEventHandler(manager.handleEvent)
+                
+                // Wrap handleEvent to pass the deviceID
+                client.AddEventHandler(func(evt interface{}) {
+                    manager.handleEvent(instance.ID, evt)
+                })
                 go client.Connect()
             }
         }
@@ -72,13 +77,22 @@ func NewMultiClientManager(dbDialect, dbAddress string, dispatcher *EventDispatc
 	return manager, nil
 }
 
-func (m *MultiClientManager) handleEvent(evt interface{}) {
+func (m *MultiClientManager) handleEvent(deviceID string, evt interface{}) {
 	switch v := evt.(type) {
 	case *events.Message:
+        // Record incoming message stat
+        if !v.Info.IsFromMe {
+            m.instanceStore.IncrementMessageStat(deviceID, "in")
+        } else {
+            m.instanceStore.IncrementMessageStat(deviceID, "out")
+        }
+
 		// Sniff incoming messages to capture the exact payload Uazapi uses
 		if v.Message != nil && (v.Message.GetInteractiveMessage() != nil || v.Message.GetViewOnceMessage() != nil || v.Message.GetViewOnceMessageV2() != nil || v.Message.GetViewOnceMessageV2Extension() != nil || v.Message.GetTemplateMessage() != nil || v.Message.GetButtonsMessage() != nil || v.Message.GetListMessage() != nil) {
 			waLog.Stdout("Sniffer", "INFO", true).Infof("\n\n====== INTERACTIVE MESSAGE SNIFFED ======\nJID: %s\nDeviceID: %d\nProtobuf:\n%+v\n==========================================\n\n", v.Info.Sender.String(), v.Info.Sender.Device, v.Message)
 		}
+	case *events.Receipt:
+        // Also trace delivered/sent if needed, but usually we just track messages sent directly in the worker or when events.Message fromMe=true arrives.
 	}
     m.dispatcher.Dispatch(evt)
 }
@@ -155,7 +169,7 @@ func (m *MultiClientManager) NewClientWithName(name string) (string, *whatsmeow.
             m.instanceStore.UpdateInstanceJID(deviceID, v.ID.String())
             waLog.Stdout("Manager", "INFO", true).Infof("Device %s successfully paired with JID %s", deviceID, v.ID.String())
         }
-        m.handleEvent(evt)
+        m.handleEvent(deviceID, evt)
     })
     
     return deviceID, client, nil
@@ -242,6 +256,37 @@ func (m *MultiClientManager) RenameInstance(id, newName string) error {
     return nil
 }
 
+// DeleteInstance removes an instance, disconnects its client, and drops it from the DB
+func (m *MultiClientManager) DeleteInstance(id string) error {
+    m.mu.Lock()
+    defer m.mu.Unlock()
+
+    client, exists := m.clients[id]
+    if exists {
+        if client.IsConnected() {
+            client.Disconnect()
+        }
+        client.Logout(context.Background())
+        delete(m.clients, id)
+    }
+
+    err := m.instanceStore.DeleteInstance(id)
+    if err != nil {
+         return fmt.Errorf("failed to delete instance from db: %w", err)
+    }
+    return nil
+}
+
+// GetMessageStats retrieves message statistics
+func (m *MultiClientManager) GetMessageStats(instanceID string) ([]MessageStatGroup, error) {
+    return m.instanceStore.GetMessageStats(instanceID)
+}
+
+// RecordMessageStat increments the message count for dash charts
+func (m *MultiClientManager) RecordMessageStat(instanceID string, direction string) error {
+    return m.instanceStore.IncrementMessageStat(instanceID, direction)
+}
+
 // ListInstances returns a list of all managed instances with metadata
 func (m *MultiClientManager) ListInstances() []Instance {
     m.mu.RLock()
@@ -255,18 +300,29 @@ func (m *MultiClientManager) ListInstances() []Instance {
     }
 
     // Merge status from map
-    for i, inst := range dbInstances {
-        if client, ok := m.clients[inst.ID]; ok {
-            if client.IsConnected() {
-                dbInstances[i].Status = "connected"
-            } else if client.Store.ID != nil {
-                dbInstances[i].Status = "disconnected"
-            } else {
-                dbInstances[i].Status = "unpaired"
-            }
-        } else {
-            dbInstances[i].Status = "offline"
+    for i, dbInst := range dbInstances {
+        status := "offline" // Default status
+
+        // If JID is empty, it means it has never successfully paired
+        if dbInst.JID == "" {
+            status = "unpaired"
         }
+
+        client, exists := m.clients[dbInst.ID]
+        if exists {
+            if client.IsConnected() {
+                status = "connected"
+            } else if client.IsLoggedIn() { // Client exists and has logged in before, but is not currently connected
+                status = "reconnecting"
+            } else {
+                // Client exists but is not connected and not logged in (e.g., store is empty)
+                status = "unpaired"
+            }
+        }
+        // If client does not exist in memory, and JID was not empty, it remains "offline"
+        // If client does not exist in memory, and JID was empty, it remains "unpaired"
+
+        dbInstances[i].Status = status
     }
     
     return dbInstances

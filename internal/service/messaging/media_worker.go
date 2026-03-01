@@ -13,6 +13,7 @@ import (
 	"github.com/user/whatsmeow-basileia/internal/infrastructure/rabbitmq"
 	"github.com/user/whatsmeow-basileia/internal/infrastructure/whatsapp"
 	"github.com/user/whatsmeow-basileia/internal/service/media"
+	"github.com/user/whatsmeow-basileia/pkg/logger"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/types"
 	"go.uber.org/zap"
@@ -170,9 +171,13 @@ func (w *MediaWorker) handleSendMedia(body []byte) error {
 	msgID, err := builder.Send(ctxSend)
 	if err != nil {
 		w.logger.Error("Failed to send media message after retries", zap.Error(err))
+		logger.PushLog("error", "Failed to send media: "+err.Error())
 		return err
 	}
 
 	w.logger.Info("Media message sent successfully via queue", zap.String("msgID", msgID), zap.String("phone", payload.Number))
+	logger.PushLog("info", "Media message sent successfully to "+payload.Number)
+	w.manager.RecordMessageStat(payload.DeviceID, "out")
+
 	return nil
 }

@@ -34,6 +34,7 @@ services:
       - "8179:80" # apiwpb.nandus.com.br
     depends_on:
       - app
+    restart: unless-stopped
     networks:
       - whatsmeow-net
 
@@ -106,6 +107,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
 networks:
   whatsmeow-net:

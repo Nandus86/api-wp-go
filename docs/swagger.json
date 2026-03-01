@@ -6,12 +6,11 @@
         "contact": {},
         "version": "1.0"
     },
-    "host": "localhost:3179",
     "basePath": "/api",
     "paths": {
         "/device": {
             "get": {
-                "description": "Returns a list of all active device IDs",
+                "description": "Returns a list of all active instances",
                 "produces": [
                     "application/json"
                 ],
@@ -25,7 +24,7 @@
                         "schema": {
                             "type": "array",
                             "items": {
-                                "type": "string"
+                                "$ref": "#/definitions/whatsapp.Instance"
                             }
                         }
                     }
@@ -33,6 +32,9 @@
             },
             "post": {
                 "description": "Generates a new device ID and initializes a client",
+                "consumes": [
+                    "application/json"
+                ],
                 "produces": [
                     "application/json"
                 ],
@@ -40,6 +42,49 @@
                     "device"
                 ],
                 "summary": "Create a new device",
+                "parameters": [
+                    {
+                        "description": "Device Name",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.CreateDeviceRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/device/{id}": {
+            "delete": {
+                "description": "Deletes an instance, terminates connection and drops metadata",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "device"
+                ],
+                "summary": "Delete device",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Device ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -75,6 +120,82 @@
                 "responses": {}
             }
         },
+        "/device/{id}/reconnect": {
+            "post": {
+                "description": "Reconnects a previously paired device",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "device"
+                ],
+                "summary": "Reconnect device",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Device ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/device/{id}/rename": {
+            "put": {
+                "description": "Updates the name of an existing device/instance",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "device"
+                ],
+                "summary": "Rename a device",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Device ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "New Device Name",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.CreateDeviceRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/device/{id}/status": {
             "get": {
                 "description": "Returns the connection status of the device",
@@ -107,9 +228,32 @@
                 }
             }
         },
-        "/message/send": {
+        "/logs": {
+            "get": {
+                "description": "Returns the latest logs stored in memory",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "app"
+                ],
+                "summary": "Get system logs",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/logger.LogEntry"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/message/interactive/button": {
             "post": {
-                "description": "Sends a text message to a specific phone number",
+                "description": "Sends an interactive button message (Queued)",
                 "consumes": [
                     "application/json"
                 ],
@@ -119,7 +263,7 @@
                 "tags": [
                     "message"
                 ],
-                "summary": "Send a message",
+                "summary": "Send an interactive button message",
                 "parameters": [
                     {
                         "description": "Message Request",
@@ -143,9 +287,219 @@
                     }
                 }
             }
+        },
+        "/message/interactive/copy": {
+            "post": {
+                "description": "Sends an interactive button message specifically designed to copy text (Queued)",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "message"
+                ],
+                "summary": "Send an interactive copy button (eg. Copy PIX)",
+                "parameters": [
+                    {
+                        "description": "Copy Button Request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.SendCopyButtonRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/message/media": {
+            "post": {
+                "description": "Sends a media message (Queued)",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "message"
+                ],
+                "summary": "Send a media message (image, video, document, audio)",
+                "parameters": [
+                    {
+                        "description": "Media Message Request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.SendMediaRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/message/send": {
+            "post": {
+                "description": "Sends a plain text message (Queued)",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "message"
+                ],
+                "summary": "Send a text message",
+                "parameters": [
+                    {
+                        "description": "Message Request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.SendMessageRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/stats": {
+            "get": {
+                "description": "Returns message volume stats per hour",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "app"
+                ],
+                "summary": "Get statistics",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Device ID to filter by",
+                        "name": "id",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/whatsapp.MessageStatGroup"
+                            }
+                        }
+                    }
+                }
+            }
         }
     },
     "definitions": {
+        "api.CreateDeviceRequest": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.SendCopyButtonRequest": {
+            "type": "object",
+            "properties": {
+                "copy_code": {
+                    "description": "The actual content to be copied (e.g. PIX payload)",
+                    "type": "string"
+                },
+                "copy_text": {
+                    "description": "The button display text (e.g. \"Copy PIX\")",
+                    "type": "string"
+                },
+                "device_id": {
+                    "type": "string"
+                },
+                "footer": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "number": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.SendMediaRequest": {
+            "type": "object",
+            "properties": {
+                "base64": {
+                    "description": "Base64 encoded media string (e.g. data:image/png;base64,...)",
+                    "type": "string"
+                },
+                "caption": {
+                    "type": "string"
+                },
+                "device_id": {
+                    "type": "string"
+                },
+                "fileName": {
+                    "type": "string"
+                },
+                "media_url": {
+                    "description": "Public URL to download the media from",
+                    "type": "string"
+                },
+                "mimetype": {
+                    "type": "string"
+                },
+                "number": {
+                    "type": "string"
+                },
+                "type": {
+                    "description": "image, video, document, audio",
+                    "type": "string"
+                }
+            }
+        },
         "api.SendMessageRequest": {
             "type": "object",
             "properties": {
@@ -164,7 +518,59 @@
                 "message": {
                     "type": "string"
                 },
-                "phone": {
+                "number": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "type": {
+                    "description": "button, list",
+                    "type": "string"
+                }
+            }
+        },
+        "logger.LogEntry": {
+            "type": "object",
+            "properties": {
+                "level": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "time": {
+                    "type": "string"
+                }
+            }
+        },
+        "whatsapp.Instance": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "jid": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "whatsapp.MessageStatGroup": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "direction": {
+                    "type": "string"
+                },
+                "hour": {
                     "type": "string"
                 }
             }

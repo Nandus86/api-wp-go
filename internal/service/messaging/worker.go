@@ -8,6 +8,7 @@ import (
 
 	"github.com/user/whatsmeow-basileia/internal/infrastructure/rabbitmq"
 	"github.com/user/whatsmeow-basileia/internal/infrastructure/whatsapp"
+	"github.com/user/whatsmeow-basileia/pkg/logger"
 	"go.mau.fi/whatsmeow/types"
 	"go.uber.org/zap"
 )
@@ -105,9 +106,14 @@ func (w *Worker) handleSendMessage(body []byte) error {
 	msgID, err := builder.Send(ctx)
 	if err != nil {
 		w.logger.Error("Failed to send message via Whatsmeow", zap.Error(err))
+		logger.PushLog("error", "Failed to send message via Whatsmeow: "+err.Error())
 		return err // Requeue
 	}
 
 	w.logger.Info("Message sent successfully via Queue", zap.String("msgID", msgID), zap.String("phone", payload.Phone))
+	logger.PushLog("info", "Message sent successfully to "+payload.Phone)
+	// Record outgoing statement stat
+	w.manager.RecordMessageStat(payload.DeviceID, "out")
+
 	return nil
 }

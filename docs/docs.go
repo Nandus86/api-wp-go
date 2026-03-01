@@ -17,7 +17,7 @@ const docTemplate = `{
     "paths": {
         "/device": {
             "get": {
-                "description": "Returns a list of all active instances with ID, name, and status",
+                "description": "Returns a list of all active instances",
                 "produces": [
                     "application/json"
                 ],
@@ -31,14 +31,14 @@ const docTemplate = `{
                         "schema": {
                             "type": "array",
                             "items": {
-                                "$ref": "#/definitions/api.InstanceInfo"
+                                "$ref": "#/definitions/whatsapp.Instance"
                             }
                         }
                     }
                 }
             },
             "post": {
-                "description": "Generates a new device ID (hashed) and initializes a WhatsApp client session",
+                "description": "Generates a new device ID and initializes a client",
                 "consumes": [
                     "application/json"
                 ],
@@ -64,7 +64,96 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/api.CreateDeviceResponse"
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/device/{id}": {
+            "delete": {
+                "description": "Deletes an instance, terminates connection and drops metadata",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "device"
+                ],
+                "summary": "Delete device",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Device ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/device/{id}/qr": {
+            "get": {
+                "description": "Connects to SSE stream to receive QR codes for pairing",
+                "produces": [
+                    "text/event-stream"
+                ],
+                "tags": [
+                    "device"
+                ],
+                "summary": "Get QR code stream",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Device ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {}
+            }
+        },
+        "/device/{id}/reconnect": {
+            "post": {
+                "description": "Reconnects a previously paired device",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "device"
+                ],
+                "summary": "Reconnect device",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Device ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     }
                 }
@@ -72,7 +161,7 @@ const docTemplate = `{
         },
         "/device/{id}/rename": {
             "put": {
-                "description": "Updates the display name of an existing device/instance",
+                "description": "Updates the name of an existing device/instance",
                 "consumes": [
                     "application/json"
                 ],
@@ -105,41 +194,18 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/api.RenameDeviceResponse"
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
-                    }
-                }
-            }
-        },
-        "/device/{id}/qr": {
-            "get": {
-                "description": "Opens a Server-Sent Events (SSE) stream that pushes QR code data for pairing the WhatsApp session",
-                "produces": [
-                    "text/event-stream"
-                ],
-                "tags": [
-                    "device"
-                ],
-                "summary": "Get QR code stream",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Device ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "SSE stream with QR code data"
                     }
                 }
             }
         },
         "/device/{id}/status": {
             "get": {
-                "description": "Returns the connection status (connected/disconnected) of the device",
+                "description": "Returns the connection status of the device",
                 "produces": [
                     "application/json"
                 ],
@@ -150,7 +216,7 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Device ID",
+                        "description": "Device ID (JID)",
                         "name": "id",
                         "in": "path",
                         "required": true
@@ -160,18 +226,152 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/api.StatusResponse"
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
-                    },
-                    "404": {
-                        "description": "Device not found"
+                    }
+                }
+            }
+        },
+        "/logs": {
+            "get": {
+                "description": "Returns the latest logs stored in memory",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "app"
+                ],
+                "summary": "Get system logs",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/logger.LogEntry"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/message/interactive/button": {
+            "post": {
+                "description": "Sends an interactive button message (Queued)",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "message"
+                ],
+                "summary": "Send an interactive button message",
+                "parameters": [
+                    {
+                        "description": "Message Request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.SendMessageRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/message/interactive/copy": {
+            "post": {
+                "description": "Sends an interactive button message specifically designed to copy text (Queued)",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "message"
+                ],
+                "summary": "Send an interactive copy button (eg. Copy PIX)",
+                "parameters": [
+                    {
+                        "description": "Copy Button Request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.SendCopyButtonRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/message/media": {
+            "post": {
+                "description": "Sends a media message (Queued)",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "message"
+                ],
+                "summary": "Send a media message (image, video, document, audio)",
+                "parameters": [
+                    {
+                        "description": "Media Message Request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.SendMediaRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
                     }
                 }
             }
         },
         "/message/send": {
             "post": {
-                "description": "Enqueues a plain text message to be sent asynchronously via RabbitMQ. Supports both 'phone' and 'number' as well as 'message' and 'text' aliases.",
+                "description": "Sends a plain text message (Queued)",
                 "consumes": [
                     "application/json"
                 ],
@@ -184,7 +384,7 @@ const docTemplate = `{
                 "summary": "Send a text message",
                 "parameters": [
                     {
-                        "description": "Text Message Payload",
+                        "description": "Message Request",
                         "name": "request",
                         "in": "body",
                         "required": true,
@@ -195,96 +395,44 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "Message queued",
+                        "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/api.QueuedResponse"
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
-                    },
-                    "400": {
-                        "description": "Invalid request body"
-                    },
-                    "500": {
-                        "description": "Failed to enqueue message"
                     }
                 }
             }
         },
-        "/message/media": {
-            "post": {
-                "description": "Enqueues a media message (image, video, document, audio). Downloads the media from `media_url` and uploads it to WhatsApp. Mimetype is optional but recommended for documents/audio.",
-                "consumes": [
-                    "application/json"
-                ],
+        "/stats": {
+            "get": {
+                "description": "Returns message volume stats per hour",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "message"
+                    "app"
                 ],
-                "summary": "Send a media message",
+                "summary": "Get statistics",
                 "parameters": [
                     {
-                        "description": "Media Message Payload",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/api.SendMediaRequest"
-                        }
+                        "type": "string",
+                        "description": "Device ID to filter by",
+                        "name": "id",
+                        "in": "query"
                     }
                 ],
                 "responses": {
                     "200": {
-                        "description": "Message queued",
+                        "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/api.QueuedResponse"
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/whatsapp.MessageStatGroup"
+                            }
                         }
-                    },
-                    "400": {
-                        "description": "Invalid request body"
-                    },
-                    "500": {
-                        "description": "Failed to enqueue message"
-                    }
-                }
-            }
-        },
-        "/message/interactive/button": {
-            "post": {
-                "description": "Enqueues an interactive button message to be sent asynchronously via RabbitMQ. The message uses WhatsApp NativeFlowMessage for rendering clickable buttons on the recipient's phone. Supports both 'phone' and 'number' field aliases.",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "message"
-                ],
-                "summary": "Send interactive buttons",
-                "parameters": [
-                    {
-                        "description": "Interactive Button Payload",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/api.SendMessageRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "Message queued",
-                        "schema": {
-                            "$ref": "#/definitions/api.QueuedResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Invalid request body"
-                    },
-                    "500": {
-                        "description": "Failed to enqueue message"
                     }
                 }
             }
@@ -295,164 +443,142 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "name": {
-                    "type": "string",
-                    "description": "Display name for the instance",
-                    "example": "Vendas Principal"
-                }
-            }
-        },
-        "api.CreateDeviceResponse": {
-            "type": "object",
-            "properties": {
-                "device_id": {
-                    "type": "string",
-                    "example": "2a7f8a3e-343f-4d8b-ad3c-ab375af2dfda"
-                },
-                "name": {
-                    "type": "string",
-                    "example": "Vendas Principal"
-                }
-            }
-        },
-        "api.RenameDeviceResponse": {
-            "type": "object",
-            "properties": {
-                "status": {
-                    "type": "string",
-                    "example": "success"
-                },
-                "device_id": {
-                    "type": "string"
-                },
-                "name": {
                     "type": "string"
                 }
             }
         },
-        "api.StatusResponse": {
+        "api.SendCopyButtonRequest": {
             "type": "object",
             "properties": {
-                "status": {
-                    "type": "string",
-                    "enum": ["connected", "disconnected"],
-                    "example": "connected"
-                }
-            }
-        },
-        "api.QueuedResponse": {
-            "type": "object",
-            "properties": {
-                "status": {
-                    "type": "string",
-                    "example": "queued"
-                }
-            }
-        },
-        "api.InstanceInfo": {
-            "type": "object",
-            "properties": {
-                "id": {
-                    "type": "string",
-                    "description": "Hashed device ID"
+                "copy_code": {
+                    "description": "The actual content to be copied (e.g. PIX payload)",
+                    "type": "string"
                 },
-                "name": {
-                    "type": "string",
-                    "description": "Display name"
+                "copy_text": {
+                    "description": "The button display text (e.g. \"Copy PIX\")",
+                    "type": "string"
                 },
-                "connected": {
-                    "type": "boolean"
-                }
-            }
-        },
-        "api.SendMessageRequest": {
-            "type": "object",
-            "required": ["device_id"],
-            "properties": {
                 "device_id": {
-                    "type": "string",
-                    "description": "ID of the connected device to send from",
-                    "example": "2a7f8a3e-343f-4d8b-ad3c-ab375af2dfda"
-                },
-                "number": {
-                    "type": "string",
-                    "description": "Recipient phone number (DDI+DDD+number, no + sign). Alias: 'phone'",
-                    "example": "554399284670"
-                },
-                "message": {
-                    "type": "string",
-                    "description": "Body text of the message. Alias: 'text'",
-                    "example": "Escolha uma opcao:"
-                },
-                "title": {
-                    "type": "string",
-                    "description": "Header title displayed above the message body",
-                    "example": "Menu Principal"
+                    "type": "string"
                 },
                 "footer": {
-                    "type": "string",
-                    "description": "Footer text displayed below the buttons. Alias: 'footerText'",
-                    "example": "Powered by Basileia"
+                    "type": "string"
                 },
-                "type": {
-                    "type": "string",
-                    "description": "Message type: 'button' for interactive buttons",
-                    "enum": ["button", "list", ""],
-                    "example": "button"
+                "message": {
+                    "type": "string"
                 },
-                "buttons": {
-                    "type": "array",
-                    "description": "Array of button labels (max 3). Use 'Label|custom_id' for custom IDs. Alias: 'choices'",
-                    "items": {
-                        "type": "string"
-                    },
-                    "example": ["Sim", "Nao", "Talvez"]
+                "number": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
                 }
             }
         },
         "api.SendMediaRequest": {
             "type": "object",
-            "required": ["device_id", "type"],
             "properties": {
-                "device_id": {
-                    "type": "string",
-                    "description": "ID of the connected device to send from",
-                    "example": "2a7f8a3e-343f-4d8b-ad3c-ab375af2dfda"
-                },
-                "number": {
-                    "type": "string",
-                    "description": "Recipient phone number (DDI+DDD+number, no + sign). Alias: 'phone'",
-                    "example": "554399284670"
-                },
-                "media_url": {
-                    "type": "string",
-                    "description": "Public URL where the media can be downloaded from. Required if base64 is empty.",
-                    "example": "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf"
-                },
                 "base64": {
-                    "type": "string",
-                    "description": "Base64 encoded media string (e.g. data:image/png;base64,iVBORw0KGgo...). Required if media_url is empty.",
-                    "example": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
-                },
-                "type": {
-                    "type": "string",
-                    "description": "Type of media being sent",
-                    "enum": ["image", "video", "document", "audio"],
-                    "example": "document"
+                    "description": "Base64 encoded media string (e.g. data:image/png;base64,...)",
+                    "type": "string"
                 },
                 "caption": {
-                    "type": "string",
-                    "description": "Caption text attached to the media (images/videos/documents). Alias: 'text'",
-                    "example": "Segue anexo o documento solicitado"
+                    "type": "string"
                 },
-                "mimetype": {
-                    "type": "string",
-                    "description": "Optional custom mimetype (e.g. application/pdf)",
-                    "example": "application/pdf"
+                "device_id": {
+                    "type": "string"
                 },
                 "fileName": {
-                    "type": "string",
-                    "description": "Optional explicit file name when type=document",
-                    "example": "relatorio.pdf"
+                    "type": "string"
+                },
+                "media_url": {
+                    "description": "Public URL to download the media from",
+                    "type": "string"
+                },
+                "mimetype": {
+                    "type": "string"
+                },
+                "number": {
+                    "type": "string"
+                },
+                "type": {
+                    "description": "image, video, document, audio",
+                    "type": "string"
+                }
+            }
+        },
+        "api.SendMessageRequest": {
+            "type": "object",
+            "properties": {
+                "buttons": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "device_id": {
+                    "type": "string"
+                },
+                "footer": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "number": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "type": {
+                    "description": "button, list",
+                    "type": "string"
+                }
+            }
+        },
+        "logger.LogEntry": {
+            "type": "object",
+            "properties": {
+                "level": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "time": {
+                    "type": "string"
+                }
+            }
+        },
+        "whatsapp.Instance": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "jid": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "whatsapp.MessageStatGroup": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "direction": {
+                    "type": "string"
+                },
+                "hour": {
+                    "type": "string"
                 }
             }
         }
@@ -462,11 +588,11 @@ const docTemplate = `{
 // SwaggerInfo holds exported Swagger Info so clients can modify it
 var SwaggerInfo = &swag.Spec{
 	Version:          "1.0",
-	Host:             "localhost:3179",
+	Host:             "",
 	BasePath:         "/api",
 	Schemes:          []string{},
 	Title:            "WhatsMeow Basileia API",
-	Description:      "API WhatsApp multi-device com mensageria assíncrona (RabbitMQ), botões interativos (NativeFlowMessage), e webhooks configuráveis.",
+	Description:      "API for WhatsApp automation using WhatsMeow.",
 	InfoInstanceName: "swagger",
 	SwaggerTemplate:  docTemplate,
 	LeftDelim:        "{{",

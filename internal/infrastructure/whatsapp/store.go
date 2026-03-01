@@ -31,6 +31,17 @@ func NewInstanceStore(dbDialect, dbAddress string) (*InstanceStore, error) {
         return nil, err
     }
 
+    _, err = db.Exec(`CREATE TABLE IF NOT EXISTS message_stats (
+        id SERIAL PRIMARY KEY,
+        instance_id VARCHAR NOT NULL,
+        timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        direction VARCHAR NOT NULL, -- 'in' or 'out'
+        count INT DEFAULT 1
+    )`)
+    if err != nil {
+        return nil, err
+    }
+
     return &InstanceStore{db: db}, nil
 }
 
@@ -75,4 +86,53 @@ func (s *InstanceStore) GetAllInstances() ([]Instance, error) {
         instances = append(instances, i)
     }
     return instances, nil
+}
+
+func (s *InstanceStore) DeleteInstance(id string) error {
+    _, err := s.db.Exec(`DELETE FROM instances WHERE id = $1`, id)
+    return err
+}
+
+type MessageStatGroup struct {
+    Hour      string `json:"hour"`
+    Direction string `json:"direction"`
+    Count     int    `json:"count"`
+}
+
+func (s *InstanceStore) IncrementMessageStat(instanceID string, direction string) error {
+    // direction: "in" or "out"
+    // Insert a new record for this message event.
+    _, err := s.db.Exec(`INSERT INTO message_stats (instance_id, direction, count) VALUES ($1, $2, 1)`, instanceID, direction)
+    return err
+}
+
+func (s *InstanceStore) GetMessageStats(instanceID string) ([]MessageStatGroup, error) {
+    // Get last 24 hours of stats grouped by hour
+    query := `
+        SELECT to_char(date_trunc('hour', timestamp), 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as hour, direction, SUM(count) as count
+        FROM message_stats
+        WHERE timestamp >= NOW() - INTERVAL '24 HOURS'
+    `
+    var args []interface{}
+    if instanceID != "" && instanceID != "all" {
+        query += ` AND instance_id = $1 `
+        args = append(args, instanceID)
+    }
+    query += ` GROUP BY 1, 2 ORDER BY 1 ASC`
+
+    rows, err := s.db.Query(query, args...)
+    if err != nil {
+        return nil, err
+    }
+    defer rows.Close()
+
+    var stats []MessageStatGroup
+    for rows.Next() {
+        var st MessageStatGroup
+        if err := rows.Scan(&st.Hour, &st.Direction, &st.Count); err != nil {
+            return nil, err
+        }
+        stats = append(stats, st)
+    }
+    return stats, nil
 }
