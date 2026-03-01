@@ -249,6 +249,60 @@ func generateID(i int) string {
 	return fmt.Sprintf("id_%d", i)
 }
 
+func (b *MessageBuilder) WithContact(fullName, phone string) *MessageBuilder {
+	vcard := fmt.Sprintf("BEGIN:VCARD\nVERSION:3.0\nN:;%v;;;\nFN:%v\nTEL;type=CELL;waid=%v:+%v\nEND:VCARD", fullName, fullName, phone, phone)
+	b.msg.ContactMessage = &waE2E.ContactMessage{
+		DisplayName: proto.String(fullName),
+		Vcard:       proto.String(vcard),
+	}
+	b.msg.Conversation = nil
+	return b
+}
+
+func (b *MessageBuilder) WithLocation(lat, long float64, name, address string) *MessageBuilder {
+	b.msg.LocationMessage = &waE2E.LocationMessage{
+		DegreesLatitude:  proto.Float64(lat),
+		DegreesLongitude: proto.Float64(long),
+		Name:             proto.String(name),
+		Address:          proto.String(address),
+	}
+	b.msg.Conversation = nil
+	return b
+}
+
+func (b *MessageBuilder) WithRequestLocationButton(text string, footer string, title string) *MessageBuilder {
+	nfButtons := []*waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton{
+		{
+			Name: proto.String("location_request_message"),
+		},
+	}
+
+	msgVersion := int32(1)
+
+	interactiveMsg := &waE2E.InteractiveMessage{
+		Body: &waE2E.InteractiveMessage_Body{
+			Text: proto.String(text),
+		},
+		Footer: &waE2E.InteractiveMessage_Footer{
+			Text: proto.String(footer),
+		},
+		Header: &waE2E.InteractiveMessage_Header{
+			Title:              proto.String(title),
+			HasMediaAttachment: proto.Bool(false),
+		},
+		InteractiveMessage: &waE2E.InteractiveMessage_NativeFlowMessage_{
+			NativeFlowMessage: &waE2E.InteractiveMessage_NativeFlowMessage{
+				Buttons:        nfButtons,
+				MessageVersion: &msgVersion,
+			},
+		},
+	}
+
+	b.msg.Conversation = nil
+	b.msg.InteractiveMessage = interactiveMsg
+	return b
+}
+
 func (b *MessageBuilder) Send(ctx context.Context) (string, error) {
 	if b.client == nil {
 		return "", fmt.Errorf("client is nil")

@@ -122,13 +122,120 @@ func (h *Handler) ConnectInstance(w http.ResponseWriter, r *http.Request) {
 type UazSendMessageRequest struct {
 	Number string `json:"number"`
 	Text   string `json:"text,omitempty"`
-	// add other fields like caption, type, media etc
+	// media fields
 	Type     string `json:"type,omitempty"`
 	Caption  string `json:"caption,omitempty"`
 	File     string `json:"file,omitempty"`
 	Filename string `json:"filename,omitempty"`
 	Async    bool   `json:"async,omitempty"`
+
+	// Contact
+	FullName     string `json:"fullName,omitempty"`
+	PhoneNumber  string `json:"phoneNumber,omitempty"`
+
+	// Location
+	Address   string  `json:"address,omitempty"`
+	Name      string  `json:"name,omitempty"`
+	Latitude  float64 `json:"latitude,omitempty"`
+	Longitude float64 `json:"longitude,omitempty"`
+
+	// Presence
+	Presence string `json:"presence,omitempty"`
+
+	// Menu / List
+	ListButton string `json:"listButton,omitempty"`
+    Choices    []string `json:"choices,omitempty"`
+
+	// payment / pix
+	Amount  float64 `json:"amount,omitempty"`
+	PixKey  string  `json:"pixKey,omitempty"`
+	PixType string  `json:"pixType,omitempty"`
+	PixName string  `json:"pixName,omitempty"`
 }
+
+func (h *Handler) SendUazGeneric(w http.ResponseWriter, r *http.Request) {
+	token := r.Header.Get("token")
+	if token == "" {
+		http.Error(w, "Unauthorized: missing token", http.StatusUnauthorized)
+		return
+	}
+
+	var req UazSendMessageRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Use specific type if empty based on route later or let the worker determine
+	msgType := req.Type
+	
+	switch r.URL.Path {
+	case "/send/contact":
+		msgType = "contact"
+	case "/send/location":
+		msgType = "location"
+	case "/message/presence":
+		msgType = "presence" 
+	case "/send/status":
+		msgType = "status"
+	case "/send/menu":
+		if msgType == "" { msgType = "list" } // it could be "button" or "list" from payload
+	case "/send/carousel":
+		msgType = "carousel"
+	case "/send/location-button":
+		msgType = "location-button"
+	case "/send/request-payment":
+		msgType = "request-payment"
+	case "/send/pix-button":
+		msgType = "pix-button"
+	}
+
+	// Create a generic payload mapping all fields
+	payload := map[string]interface{}{
+		"device_id":    token,
+		"number":       req.Number,
+		"text":         req.Text,
+		"type":         msgType,
+		"caption":      req.Caption,
+		"file":         req.File,
+		"filename":     req.Filename,
+		"fullName":     req.FullName,
+		"phoneNumber":  req.PhoneNumber,
+		"address":      req.Address,
+		"name":         req.Name,
+		"latitude":     req.Latitude,
+		"longitude":    req.Longitude,
+		"presence":     req.Presence,
+		"listButton":   req.ListButton,
+		"choices":      req.Choices,
+		"amount":       req.Amount,
+		"pixKey":       req.PixKey,
+		"pixType":      req.PixType,
+		"pixName":      req.PixName,
+	}
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		http.Error(w, "Failed to encode message to queue", http.StatusInternalServerError)
+		return
+	}
+
+	err = h.rmqClient.Publish(r.Context(), "send_message_queue", payloadBytes)
+	if err != nil {
+		http.Error(w, "Failed to enqueue message", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"id": "queued",
+		"response": map[string]string{
+			"status":  "success",
+			"message": "Message sent successfully",
+		},
+	})
+}
+
 
 func (h *Handler) SendUazText(w http.ResponseWriter, r *http.Request) {
 	token := r.Header.Get("token")

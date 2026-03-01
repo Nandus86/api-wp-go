@@ -83,6 +83,7 @@ func (h *Handler) Router() http.Handler {
 	r.Post("/message/interactive/button", h.SendInteractiveButton)
 	r.Post("/message/interactive/copy", h.SendInteractiveCopyButton)
 	r.Post("/message/media", h.SendMedia)
+	r.Post("/message/presence", h.SendUazGeneric)
 	r.Get("/logs", h.GetLogs)
 	r.Get("/stats", h.GetStats)
 
@@ -99,6 +100,14 @@ func (h *Handler) Router() http.Handler {
 	r.Route("/send", func(r chi.Router) {
 		r.Post("/text", h.SendUazText)
 		r.Post("/media", h.SendUazMedia)
+		r.Post("/contact", h.SendUazGeneric)
+		r.Post("/location", h.SendUazGeneric)
+		r.Post("/status", h.SendUazGeneric)
+		r.Post("/menu", h.SendUazGeneric)
+		r.Post("/carousel", h.SendUazGeneric)
+		r.Post("/location-button", h.SendUazGeneric)
+		r.Post("/request-payment", h.SendUazGeneric)
+		r.Post("/pix-button", h.SendUazGeneric)
 	})
 
 	return r
