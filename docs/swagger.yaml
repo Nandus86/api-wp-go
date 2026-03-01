@@ -1,11 +1,40 @@
 basePath: /api
 definitions:
-  api.CreateDeviceRequest:
+  github_com_user_whatsmeow-basileia_internal_infrastructure_whatsapp.Instance:
+    properties:
+      id:
+        type: string
+      jid:
+        type: string
+      name:
+        type: string
+      status:
+        type: string
+    type: object
+  github_com_user_whatsmeow-basileia_internal_infrastructure_whatsapp.MessageStatGroup:
+    properties:
+      count:
+        type: integer
+      direction:
+        type: string
+      hour:
+        type: string
+    type: object
+  github_com_user_whatsmeow-basileia_pkg_logger.LogEntry:
+    properties:
+      level:
+        type: string
+      message:
+        type: string
+      time:
+        type: string
+    type: object
+  internal_api.CreateDeviceRequest:
     properties:
       name:
         type: string
     type: object
-  api.SendCopyButtonRequest:
+  internal_api.SendCopyButtonRequest:
     properties:
       copy_code:
         description: The actual content to be copied (e.g. PIX payload)
@@ -24,7 +53,7 @@ definitions:
       title:
         type: string
     type: object
-  api.SendMediaRequest:
+  internal_api.SendMediaRequest:
     properties:
       base64:
         description: Base64 encoded media string (e.g. data:image/png;base64,...)
@@ -46,7 +75,7 @@ definitions:
         description: image, video, document, audio
         type: string
     type: object
-  api.SendMessageRequest:
+  internal_api.SendMessageRequest:
     properties:
       buttons:
         items:
@@ -66,33 +95,94 @@ definitions:
         description: button, list
         type: string
     type: object
-  logger.LogEntry:
+  internal_api.UazInitRequest:
     properties:
-      level:
+      adminField01:
         type: string
-      message:
+      adminField02:
         type: string
-      time:
+      browser:
+        type: string
+      fingerprintProfile:
+        type: string
+      name:
+        type: string
+      systemName:
         type: string
     type: object
-  whatsapp.Instance:
+  internal_api.UazInitResponse:
     properties:
-      id:
+      instance:
+        $ref: '#/definitions/internal_api.UazInstance'
+      response:
         type: string
-      jid:
+      token:
+        type: string
+    type: object
+  internal_api.UazInstance:
+    properties:
+      created:
+        type: string
+      id:
         type: string
       name:
         type: string
       status:
         type: string
-    type: object
-  whatsapp.MessageStatGroup:
-    properties:
-      count:
-        type: integer
-      direction:
+      systemName:
         type: string
-      hour:
+      token:
+        type: string
+    type: object
+  internal_api.UazSendMessageRequest:
+    properties:
+      address:
+        description: Location
+        type: string
+      amount:
+        description: payment / pix
+        type: number
+      async:
+        type: boolean
+      caption:
+        type: string
+      choices:
+        items:
+          type: string
+        type: array
+      file:
+        type: string
+      filename:
+        type: string
+      fullName:
+        description: Contact
+        type: string
+      latitude:
+        type: number
+      listButton:
+        description: Menu / List
+        type: string
+      longitude:
+        type: number
+      name:
+        type: string
+      number:
+        type: string
+      phoneNumber:
+        type: string
+      pixKey:
+        type: string
+      pixName:
+        type: string
+      pixType:
+        type: string
+      presence:
+        description: Presence
+        type: string
+      text:
+        type: string
+      type:
+        description: media fields
         type: string
     type: object
 info:
@@ -111,7 +201,7 @@ paths:
           description: OK
           schema:
             items:
-              $ref: '#/definitions/whatsapp.Instance'
+              $ref: '#/definitions/github_com_user_whatsmeow-basileia_internal_infrastructure_whatsapp.Instance'
             type: array
       summary: List devices
       tags:
@@ -126,7 +216,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/api.CreateDeviceRequest'
+          $ref: '#/definitions/internal_api.CreateDeviceRequest'
       produces:
       - application/json
       responses:
@@ -212,7 +302,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/api.CreateDeviceRequest'
+          $ref: '#/definitions/internal_api.CreateDeviceRequest'
       produces:
       - application/json
       responses:
@@ -246,6 +336,76 @@ paths:
       summary: Get device status
       tags:
       - device
+  /instance/connect:
+    post:
+      consumes:
+      - application/json
+      description: Connects the instance to WhatsApp and returns a base64 QR Code
+        if not logged in.
+      parameters:
+      - description: Instance Token
+        in: header
+        name: token
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Connection status or QR code
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: 'Unauthorized: missing token'
+          schema:
+            type: string
+        "404":
+          description: Device not found or not loaded
+          schema:
+            type: string
+        "500":
+          description: Failed to connect
+          schema:
+            type: string
+        "504":
+          description: Timeout waiting for QR
+          schema:
+            type: string
+      summary: Connect UazAPI Instance
+      tags:
+      - uazapi-instance
+  /instance/init:
+    post:
+      consumes:
+      - application/json
+      description: Creates a new WhatsApp instance compatible with UazAPI guidelines.
+        Returns a token to be used in the header for subsequent requests.
+      parameters:
+      - description: Instance Configuration
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api.UazInitRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_api.UazInitResponse'
+        "400":
+          description: Invalid request body or missing name
+          schema:
+            type: string
+        "500":
+          description: Failed to create instance
+          schema:
+            type: string
+      summary: Create UazAPI Instance
+      tags:
+      - uazapi-instance
   /logs:
     get:
       description: Returns the latest logs stored in memory
@@ -256,7 +416,7 @@ paths:
           description: OK
           schema:
             items:
-              $ref: '#/definitions/logger.LogEntry'
+              $ref: '#/definitions/github_com_user_whatsmeow-basileia_pkg_logger.LogEntry'
             type: array
       summary: Get system logs
       tags:
@@ -272,7 +432,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/api.SendMessageRequest'
+          $ref: '#/definitions/internal_api.SendMessageRequest'
       produces:
       - application/json
       responses:
@@ -297,7 +457,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/api.SendCopyButtonRequest'
+          $ref: '#/definitions/internal_api.SendCopyButtonRequest'
       produces:
       - application/json
       responses:
@@ -321,7 +481,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/api.SendMediaRequest'
+          $ref: '#/definitions/internal_api.SendMediaRequest'
       produces:
       - application/json
       responses:
@@ -334,6 +494,49 @@ paths:
       summary: Send a media message (image, video, document, audio)
       tags:
       - message
+  /message/presence:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Sends different types of messages (contact, location, status, menu, carousel, payment, pix, presence) via UazAPI format.
+        To send presence, use `/message/presence` with `{ "number": "...", "presence": "composing" }`.
+        For menus/lists, use `/send/menu` with `{ "number": "...", "listButton": "Ver", "choices": ["[Geral]", "Opção 1|op1"] }`.
+      parameters:
+      - description: Instance Token
+        in: header
+        name: token
+        required: true
+        type: string
+      - description: Message Payload
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api.UazSendMessageRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Message queued successfully
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Invalid request body
+          schema:
+            type: string
+        "401":
+          description: 'Unauthorized: missing token'
+          schema:
+            type: string
+        "500":
+          description: Failed to enqueue message
+          schema:
+            type: string
+      summary: Send UazAPI Message (Various Types)
+      tags:
+      - uazapi-messages
   /message/send:
     post:
       consumes:
@@ -345,7 +548,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/api.SendMessageRequest'
+          $ref: '#/definitions/internal_api.SendMessageRequest'
       produces:
       - application/json
       responses:
@@ -358,6 +561,431 @@ paths:
       summary: Send a text message
       tags:
       - message
+  /send/carousel:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Sends different types of messages (contact, location, status, menu, carousel, payment, pix, presence) via UazAPI format.
+        To send presence, use `/message/presence` with `{ "number": "...", "presence": "composing" }`.
+        For menus/lists, use `/send/menu` with `{ "number": "...", "listButton": "Ver", "choices": ["[Geral]", "Opção 1|op1"] }`.
+      parameters:
+      - description: Instance Token
+        in: header
+        name: token
+        required: true
+        type: string
+      - description: Message Payload
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api.UazSendMessageRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Message queued successfully
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Invalid request body
+          schema:
+            type: string
+        "401":
+          description: 'Unauthorized: missing token'
+          schema:
+            type: string
+        "500":
+          description: Failed to enqueue message
+          schema:
+            type: string
+      summary: Send UazAPI Message (Various Types)
+      tags:
+      - uazapi-messages
+  /send/contact:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Sends different types of messages (contact, location, status, menu, carousel, payment, pix, presence) via UazAPI format.
+        To send presence, use `/message/presence` with `{ "number": "...", "presence": "composing" }`.
+        For menus/lists, use `/send/menu` with `{ "number": "...", "listButton": "Ver", "choices": ["[Geral]", "Opção 1|op1"] }`.
+      parameters:
+      - description: Instance Token
+        in: header
+        name: token
+        required: true
+        type: string
+      - description: Message Payload
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api.UazSendMessageRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Message queued successfully
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Invalid request body
+          schema:
+            type: string
+        "401":
+          description: 'Unauthorized: missing token'
+          schema:
+            type: string
+        "500":
+          description: Failed to enqueue message
+          schema:
+            type: string
+      summary: Send UazAPI Message (Various Types)
+      tags:
+      - uazapi-messages
+  /send/location:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Sends different types of messages (contact, location, status, menu, carousel, payment, pix, presence) via UazAPI format.
+        To send presence, use `/message/presence` with `{ "number": "...", "presence": "composing" }`.
+        For menus/lists, use `/send/menu` with `{ "number": "...", "listButton": "Ver", "choices": ["[Geral]", "Opção 1|op1"] }`.
+      parameters:
+      - description: Instance Token
+        in: header
+        name: token
+        required: true
+        type: string
+      - description: Message Payload
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api.UazSendMessageRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Message queued successfully
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Invalid request body
+          schema:
+            type: string
+        "401":
+          description: 'Unauthorized: missing token'
+          schema:
+            type: string
+        "500":
+          description: Failed to enqueue message
+          schema:
+            type: string
+      summary: Send UazAPI Message (Various Types)
+      tags:
+      - uazapi-messages
+  /send/location-button:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Sends different types of messages (contact, location, status, menu, carousel, payment, pix, presence) via UazAPI format.
+        To send presence, use `/message/presence` with `{ "number": "...", "presence": "composing" }`.
+        For menus/lists, use `/send/menu` with `{ "number": "...", "listButton": "Ver", "choices": ["[Geral]", "Opção 1|op1"] }`.
+      parameters:
+      - description: Instance Token
+        in: header
+        name: token
+        required: true
+        type: string
+      - description: Message Payload
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api.UazSendMessageRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Message queued successfully
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Invalid request body
+          schema:
+            type: string
+        "401":
+          description: 'Unauthorized: missing token'
+          schema:
+            type: string
+        "500":
+          description: Failed to enqueue message
+          schema:
+            type: string
+      summary: Send UazAPI Message (Various Types)
+      tags:
+      - uazapi-messages
+  /send/media:
+    post:
+      consumes:
+      - application/json
+      description: Sends a media message (image, video, audio, document) in the UazAPI
+        format.
+      parameters:
+      - description: Instance Token
+        in: header
+        name: token
+        required: true
+        type: string
+      - description: Media Message Payload
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api.UazSendMessageRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Media queued successfully
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Invalid request body
+          schema:
+            type: string
+        "401":
+          description: 'Unauthorized: missing token'
+          schema:
+            type: string
+        "500":
+          description: Failed to enqueue message
+          schema:
+            type: string
+      summary: Send UazAPI Media Message
+      tags:
+      - uazapi-messages
+  /send/menu:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Sends different types of messages (contact, location, status, menu, carousel, payment, pix, presence) via UazAPI format.
+        To send presence, use `/message/presence` with `{ "number": "...", "presence": "composing" }`.
+        For menus/lists, use `/send/menu` with `{ "number": "...", "listButton": "Ver", "choices": ["[Geral]", "Opção 1|op1"] }`.
+      parameters:
+      - description: Instance Token
+        in: header
+        name: token
+        required: true
+        type: string
+      - description: Message Payload
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api.UazSendMessageRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Message queued successfully
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Invalid request body
+          schema:
+            type: string
+        "401":
+          description: 'Unauthorized: missing token'
+          schema:
+            type: string
+        "500":
+          description: Failed to enqueue message
+          schema:
+            type: string
+      summary: Send UazAPI Message (Various Types)
+      tags:
+      - uazapi-messages
+  /send/pix-button:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Sends different types of messages (contact, location, status, menu, carousel, payment, pix, presence) via UazAPI format.
+        To send presence, use `/message/presence` with `{ "number": "...", "presence": "composing" }`.
+        For menus/lists, use `/send/menu` with `{ "number": "...", "listButton": "Ver", "choices": ["[Geral]", "Opção 1|op1"] }`.
+      parameters:
+      - description: Instance Token
+        in: header
+        name: token
+        required: true
+        type: string
+      - description: Message Payload
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api.UazSendMessageRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Message queued successfully
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Invalid request body
+          schema:
+            type: string
+        "401":
+          description: 'Unauthorized: missing token'
+          schema:
+            type: string
+        "500":
+          description: Failed to enqueue message
+          schema:
+            type: string
+      summary: Send UazAPI Message (Various Types)
+      tags:
+      - uazapi-messages
+  /send/request-payment:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Sends different types of messages (contact, location, status, menu, carousel, payment, pix, presence) via UazAPI format.
+        To send presence, use `/message/presence` with `{ "number": "...", "presence": "composing" }`.
+        For menus/lists, use `/send/menu` with `{ "number": "...", "listButton": "Ver", "choices": ["[Geral]", "Opção 1|op1"] }`.
+      parameters:
+      - description: Instance Token
+        in: header
+        name: token
+        required: true
+        type: string
+      - description: Message Payload
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api.UazSendMessageRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Message queued successfully
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Invalid request body
+          schema:
+            type: string
+        "401":
+          description: 'Unauthorized: missing token'
+          schema:
+            type: string
+        "500":
+          description: Failed to enqueue message
+          schema:
+            type: string
+      summary: Send UazAPI Message (Various Types)
+      tags:
+      - uazapi-messages
+  /send/status:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Sends different types of messages (contact, location, status, menu, carousel, payment, pix, presence) via UazAPI format.
+        To send presence, use `/message/presence` with `{ "number": "...", "presence": "composing" }`.
+        For menus/lists, use `/send/menu` with `{ "number": "...", "listButton": "Ver", "choices": ["[Geral]", "Opção 1|op1"] }`.
+      parameters:
+      - description: Instance Token
+        in: header
+        name: token
+        required: true
+        type: string
+      - description: Message Payload
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api.UazSendMessageRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Message queued successfully
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Invalid request body
+          schema:
+            type: string
+        "401":
+          description: 'Unauthorized: missing token'
+          schema:
+            type: string
+        "500":
+          description: Failed to enqueue message
+          schema:
+            type: string
+      summary: Send UazAPI Message (Various Types)
+      tags:
+      - uazapi-messages
+  /send/text:
+    post:
+      consumes:
+      - application/json
+      description: Sends a simple text message in the UazAPI format.
+      parameters:
+      - description: Instance Token
+        in: header
+        name: token
+        required: true
+        type: string
+      - description: Text Message Payload
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api.UazSendMessageRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Message queued successfully
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Invalid request body
+          schema:
+            type: string
+        "401":
+          description: 'Unauthorized: missing token'
+          schema:
+            type: string
+        "500":
+          description: Failed to enqueue message
+          schema:
+            type: string
+      summary: Send UazAPI Text Message
+      tags:
+      - uazapi-messages
   /stats:
     get:
       description: Returns message volume stats per hour
@@ -373,7 +1001,7 @@ paths:
           description: OK
           schema:
             items:
-              $ref: '#/definitions/whatsapp.MessageStatGroup'
+              $ref: '#/definitions/github_com_user_whatsmeow-basileia_internal_infrastructure_whatsapp.MessageStatGroup'
             type: array
       summary: Get statistics
       tags:

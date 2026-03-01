@@ -31,7 +31,7 @@ const docTemplate = `{
                         "schema": {
                             "type": "array",
                             "items": {
-                                "$ref": "#/definitions/whatsapp.Instance"
+                                "$ref": "#/definitions/github_com_user_whatsmeow-basileia_internal_infrastructure_whatsapp.Instance"
                             }
                         }
                     }
@@ -56,7 +56,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/api.CreateDeviceRequest"
+                            "$ref": "#/definitions/internal_api.CreateDeviceRequest"
                         }
                     }
                 ],
@@ -186,7 +186,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/api.CreateDeviceRequest"
+                            "$ref": "#/definitions/internal_api.CreateDeviceRequest"
                         }
                     }
                 ],
@@ -235,6 +235,109 @@ const docTemplate = `{
                 }
             }
         },
+        "/instance/connect": {
+            "post": {
+                "description": "Connects the instance to WhatsApp and returns a base64 QR Code if not logged in.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "uazapi-instance"
+                ],
+                "summary": "Connect UazAPI Instance",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Instance Token",
+                        "name": "token",
+                        "in": "header",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Connection status or QR code",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized: missing token",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Device not found or not loaded",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Failed to connect",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "504": {
+                        "description": "Timeout waiting for QR",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/instance/init": {
+            "post": {
+                "description": "Creates a new WhatsApp instance compatible with UazAPI guidelines. Returns a token to be used in the header for subsequent requests.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "uazapi-instance"
+                ],
+                "summary": "Create UazAPI Instance",
+                "parameters": [
+                    {
+                        "description": "Instance Configuration",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.UazInitRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.UazInitResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request body or missing name",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Failed to create instance",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/logs": {
             "get": {
                 "description": "Returns the latest logs stored in memory",
@@ -251,7 +354,7 @@ const docTemplate = `{
                         "schema": {
                             "type": "array",
                             "items": {
-                                "$ref": "#/definitions/logger.LogEntry"
+                                "$ref": "#/definitions/github_com_user_whatsmeow-basileia_pkg_logger.LogEntry"
                             }
                         }
                     }
@@ -278,7 +381,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/api.SendMessageRequest"
+                            "$ref": "#/definitions/internal_api.SendMessageRequest"
                         }
                     }
                 ],
@@ -315,7 +418,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/api.SendCopyButtonRequest"
+                            "$ref": "#/definitions/internal_api.SendCopyButtonRequest"
                         }
                     }
                 ],
@@ -352,7 +455,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/api.SendMediaRequest"
+                            "$ref": "#/definitions/internal_api.SendMediaRequest"
                         }
                     }
                 ],
@@ -364,6 +467,66 @@ const docTemplate = `{
                             "additionalProperties": {
                                 "type": "string"
                             }
+                        }
+                    }
+                }
+            }
+        },
+        "/message/presence": {
+            "post": {
+                "description": "Sends different types of messages (contact, location, status, menu, carousel, payment, pix, presence) via UazAPI format.\nTo send presence, use ` + "`" + `/message/presence` + "`" + ` with ` + "`" + `{ \"number\": \"...\", \"presence\": \"composing\" }` + "`" + `.\nFor menus/lists, use ` + "`" + `/send/menu` + "`" + ` with ` + "`" + `{ \"number\": \"...\", \"listButton\": \"Ver\", \"choices\": [\"[Geral]\", \"Opção 1|op1\"] }` + "`" + `.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "uazapi-messages"
+                ],
+                "summary": "Send UazAPI Message (Various Types)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Instance Token",
+                        "name": "token",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "description": "Message Payload",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.UazSendMessageRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Message queued successfully",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request body",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized: missing token",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Failed to enqueue message",
+                        "schema": {
+                            "type": "string"
                         }
                     }
                 }
@@ -389,7 +552,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/api.SendMessageRequest"
+                            "$ref": "#/definitions/internal_api.SendMessageRequest"
                         }
                     }
                 ],
@@ -401,6 +564,606 @@ const docTemplate = `{
                             "additionalProperties": {
                                 "type": "string"
                             }
+                        }
+                    }
+                }
+            }
+        },
+        "/send/carousel": {
+            "post": {
+                "description": "Sends different types of messages (contact, location, status, menu, carousel, payment, pix, presence) via UazAPI format.\nTo send presence, use ` + "`" + `/message/presence` + "`" + ` with ` + "`" + `{ \"number\": \"...\", \"presence\": \"composing\" }` + "`" + `.\nFor menus/lists, use ` + "`" + `/send/menu` + "`" + ` with ` + "`" + `{ \"number\": \"...\", \"listButton\": \"Ver\", \"choices\": [\"[Geral]\", \"Opção 1|op1\"] }` + "`" + `.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "uazapi-messages"
+                ],
+                "summary": "Send UazAPI Message (Various Types)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Instance Token",
+                        "name": "token",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "description": "Message Payload",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.UazSendMessageRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Message queued successfully",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request body",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized: missing token",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Failed to enqueue message",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/send/contact": {
+            "post": {
+                "description": "Sends different types of messages (contact, location, status, menu, carousel, payment, pix, presence) via UazAPI format.\nTo send presence, use ` + "`" + `/message/presence` + "`" + ` with ` + "`" + `{ \"number\": \"...\", \"presence\": \"composing\" }` + "`" + `.\nFor menus/lists, use ` + "`" + `/send/menu` + "`" + ` with ` + "`" + `{ \"number\": \"...\", \"listButton\": \"Ver\", \"choices\": [\"[Geral]\", \"Opção 1|op1\"] }` + "`" + `.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "uazapi-messages"
+                ],
+                "summary": "Send UazAPI Message (Various Types)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Instance Token",
+                        "name": "token",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "description": "Message Payload",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.UazSendMessageRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Message queued successfully",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request body",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized: missing token",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Failed to enqueue message",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/send/location": {
+            "post": {
+                "description": "Sends different types of messages (contact, location, status, menu, carousel, payment, pix, presence) via UazAPI format.\nTo send presence, use ` + "`" + `/message/presence` + "`" + ` with ` + "`" + `{ \"number\": \"...\", \"presence\": \"composing\" }` + "`" + `.\nFor menus/lists, use ` + "`" + `/send/menu` + "`" + ` with ` + "`" + `{ \"number\": \"...\", \"listButton\": \"Ver\", \"choices\": [\"[Geral]\", \"Opção 1|op1\"] }` + "`" + `.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "uazapi-messages"
+                ],
+                "summary": "Send UazAPI Message (Various Types)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Instance Token",
+                        "name": "token",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "description": "Message Payload",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.UazSendMessageRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Message queued successfully",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request body",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized: missing token",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Failed to enqueue message",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/send/location-button": {
+            "post": {
+                "description": "Sends different types of messages (contact, location, status, menu, carousel, payment, pix, presence) via UazAPI format.\nTo send presence, use ` + "`" + `/message/presence` + "`" + ` with ` + "`" + `{ \"number\": \"...\", \"presence\": \"composing\" }` + "`" + `.\nFor menus/lists, use ` + "`" + `/send/menu` + "`" + ` with ` + "`" + `{ \"number\": \"...\", \"listButton\": \"Ver\", \"choices\": [\"[Geral]\", \"Opção 1|op1\"] }` + "`" + `.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "uazapi-messages"
+                ],
+                "summary": "Send UazAPI Message (Various Types)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Instance Token",
+                        "name": "token",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "description": "Message Payload",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.UazSendMessageRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Message queued successfully",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request body",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized: missing token",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Failed to enqueue message",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/send/media": {
+            "post": {
+                "description": "Sends a media message (image, video, audio, document) in the UazAPI format.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "uazapi-messages"
+                ],
+                "summary": "Send UazAPI Media Message",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Instance Token",
+                        "name": "token",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "description": "Media Message Payload",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.UazSendMessageRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Media queued successfully",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request body",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized: missing token",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Failed to enqueue message",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/send/menu": {
+            "post": {
+                "description": "Sends different types of messages (contact, location, status, menu, carousel, payment, pix, presence) via UazAPI format.\nTo send presence, use ` + "`" + `/message/presence` + "`" + ` with ` + "`" + `{ \"number\": \"...\", \"presence\": \"composing\" }` + "`" + `.\nFor menus/lists, use ` + "`" + `/send/menu` + "`" + ` with ` + "`" + `{ \"number\": \"...\", \"listButton\": \"Ver\", \"choices\": [\"[Geral]\", \"Opção 1|op1\"] }` + "`" + `.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "uazapi-messages"
+                ],
+                "summary": "Send UazAPI Message (Various Types)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Instance Token",
+                        "name": "token",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "description": "Message Payload",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.UazSendMessageRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Message queued successfully",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request body",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized: missing token",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Failed to enqueue message",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/send/pix-button": {
+            "post": {
+                "description": "Sends different types of messages (contact, location, status, menu, carousel, payment, pix, presence) via UazAPI format.\nTo send presence, use ` + "`" + `/message/presence` + "`" + ` with ` + "`" + `{ \"number\": \"...\", \"presence\": \"composing\" }` + "`" + `.\nFor menus/lists, use ` + "`" + `/send/menu` + "`" + ` with ` + "`" + `{ \"number\": \"...\", \"listButton\": \"Ver\", \"choices\": [\"[Geral]\", \"Opção 1|op1\"] }` + "`" + `.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "uazapi-messages"
+                ],
+                "summary": "Send UazAPI Message (Various Types)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Instance Token",
+                        "name": "token",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "description": "Message Payload",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.UazSendMessageRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Message queued successfully",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request body",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized: missing token",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Failed to enqueue message",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/send/request-payment": {
+            "post": {
+                "description": "Sends different types of messages (contact, location, status, menu, carousel, payment, pix, presence) via UazAPI format.\nTo send presence, use ` + "`" + `/message/presence` + "`" + ` with ` + "`" + `{ \"number\": \"...\", \"presence\": \"composing\" }` + "`" + `.\nFor menus/lists, use ` + "`" + `/send/menu` + "`" + ` with ` + "`" + `{ \"number\": \"...\", \"listButton\": \"Ver\", \"choices\": [\"[Geral]\", \"Opção 1|op1\"] }` + "`" + `.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "uazapi-messages"
+                ],
+                "summary": "Send UazAPI Message (Various Types)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Instance Token",
+                        "name": "token",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "description": "Message Payload",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.UazSendMessageRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Message queued successfully",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request body",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized: missing token",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Failed to enqueue message",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/send/status": {
+            "post": {
+                "description": "Sends different types of messages (contact, location, status, menu, carousel, payment, pix, presence) via UazAPI format.\nTo send presence, use ` + "`" + `/message/presence` + "`" + ` with ` + "`" + `{ \"number\": \"...\", \"presence\": \"composing\" }` + "`" + `.\nFor menus/lists, use ` + "`" + `/send/menu` + "`" + ` with ` + "`" + `{ \"number\": \"...\", \"listButton\": \"Ver\", \"choices\": [\"[Geral]\", \"Opção 1|op1\"] }` + "`" + `.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "uazapi-messages"
+                ],
+                "summary": "Send UazAPI Message (Various Types)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Instance Token",
+                        "name": "token",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "description": "Message Payload",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.UazSendMessageRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Message queued successfully",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request body",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized: missing token",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Failed to enqueue message",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/send/text": {
+            "post": {
+                "description": "Sends a simple text message in the UazAPI format.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "uazapi-messages"
+                ],
+                "summary": "Send UazAPI Text Message",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Instance Token",
+                        "name": "token",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "description": "Text Message Payload",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.UazSendMessageRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Message queued successfully",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request body",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized: missing token",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Failed to enqueue message",
+                        "schema": {
+                            "type": "string"
                         }
                     }
                 }
@@ -430,7 +1193,7 @@ const docTemplate = `{
                         "schema": {
                             "type": "array",
                             "items": {
-                                "$ref": "#/definitions/whatsapp.MessageStatGroup"
+                                "$ref": "#/definitions/github_com_user_whatsmeow-basileia_internal_infrastructure_whatsapp.MessageStatGroup"
                             }
                         }
                     }
@@ -439,7 +1202,52 @@ const docTemplate = `{
         }
     },
     "definitions": {
-        "api.CreateDeviceRequest": {
+        "github_com_user_whatsmeow-basileia_internal_infrastructure_whatsapp.Instance": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "jid": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_user_whatsmeow-basileia_internal_infrastructure_whatsapp.MessageStatGroup": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "direction": {
+                    "type": "string"
+                },
+                "hour": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_user_whatsmeow-basileia_pkg_logger.LogEntry": {
+            "type": "object",
+            "properties": {
+                "level": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "time": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api.CreateDeviceRequest": {
             "type": "object",
             "properties": {
                 "name": {
@@ -447,7 +1255,7 @@ const docTemplate = `{
                 }
             }
         },
-        "api.SendCopyButtonRequest": {
+        "internal_api.SendCopyButtonRequest": {
             "type": "object",
             "properties": {
                 "copy_code": {
@@ -475,7 +1283,7 @@ const docTemplate = `{
                 }
             }
         },
-        "api.SendMediaRequest": {
+        "internal_api.SendMediaRequest": {
             "type": "object",
             "properties": {
                 "base64": {
@@ -507,7 +1315,7 @@ const docTemplate = `{
                 }
             }
         },
-        "api.SendMessageRequest": {
+        "internal_api.SendMessageRequest": {
             "type": "object",
             "properties": {
                 "buttons": {
@@ -537,27 +1345,50 @@ const docTemplate = `{
                 }
             }
         },
-        "logger.LogEntry": {
+        "internal_api.UazInitRequest": {
             "type": "object",
             "properties": {
-                "level": {
+                "adminField01": {
                     "type": "string"
                 },
-                "message": {
+                "adminField02": {
                     "type": "string"
                 },
-                "time": {
+                "browser": {
+                    "type": "string"
+                },
+                "fingerprintProfile": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "systemName": {
                     "type": "string"
                 }
             }
         },
-        "whatsapp.Instance": {
+        "internal_api.UazInitResponse": {
             "type": "object",
             "properties": {
-                "id": {
+                "instance": {
+                    "$ref": "#/definitions/internal_api.UazInstance"
+                },
+                "response": {
                     "type": "string"
                 },
-                "jid": {
+                "token": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api.UazInstance": {
+            "type": "object",
+            "properties": {
+                "created": {
+                    "type": "string"
+                },
+                "id": {
                     "type": "string"
                 },
                 "name": {
@@ -565,19 +1396,85 @@ const docTemplate = `{
                 },
                 "status": {
                     "type": "string"
+                },
+                "systemName": {
+                    "type": "string"
+                },
+                "token": {
+                    "type": "string"
                 }
             }
         },
-        "whatsapp.MessageStatGroup": {
+        "internal_api.UazSendMessageRequest": {
             "type": "object",
             "properties": {
-                "count": {
-                    "type": "integer"
-                },
-                "direction": {
+                "address": {
+                    "description": "Location",
                     "type": "string"
                 },
-                "hour": {
+                "amount": {
+                    "description": "payment / pix",
+                    "type": "number"
+                },
+                "async": {
+                    "type": "boolean"
+                },
+                "caption": {
+                    "type": "string"
+                },
+                "choices": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "file": {
+                    "type": "string"
+                },
+                "filename": {
+                    "type": "string"
+                },
+                "fullName": {
+                    "description": "Contact",
+                    "type": "string"
+                },
+                "latitude": {
+                    "type": "number"
+                },
+                "listButton": {
+                    "description": "Menu / List",
+                    "type": "string"
+                },
+                "longitude": {
+                    "type": "number"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "number": {
+                    "type": "string"
+                },
+                "phoneNumber": {
+                    "type": "string"
+                },
+                "pixKey": {
+                    "type": "string"
+                },
+                "pixName": {
+                    "type": "string"
+                },
+                "pixType": {
+                    "type": "string"
+                },
+                "presence": {
+                    "description": "Presence",
+                    "type": "string"
+                },
+                "text": {
+                    "type": "string"
+                },
+                "type": {
+                    "description": "media fields",
                     "type": "string"
                 }
             }

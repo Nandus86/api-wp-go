@@ -30,6 +30,17 @@ type UazInstance struct {
 	Created    string `json:"created"`
 }
 
+// InitInstance creates a new UazAPI-compatible instance
+// @Summary Create UazAPI Instance
+// @Description Creates a new WhatsApp instance compatible with UazAPI guidelines. Returns a token to be used in the header for subsequent requests.
+// @Tags uazapi-instance
+// @Accept json
+// @Produce json
+// @Param request body UazInitRequest true "Instance Configuration"
+// @Success 200 {object} UazInitResponse
+// @Failure 400 {string} string "Invalid request body or missing name"
+// @Failure 500 {string} string "Failed to create instance"
+// @Router /instance/init [post]
 func (h *Handler) InitInstance(w http.ResponseWriter, r *http.Request) {
 	// Optional: Check admintoken header
 	// adminToken := r.Header.Get("admintoken")
@@ -69,6 +80,19 @@ func (h *Handler) InitInstance(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(res)
 }
 
+// ConnectInstance connects an existing UazAPI instance to WhatsApp
+// @Summary Connect UazAPI Instance
+// @Description Connects the instance to WhatsApp and returns a base64 QR Code if not logged in.
+// @Tags uazapi-instance
+// @Accept json
+// @Produce json
+// @Param token header string true "Instance Token"
+// @Success 200 {object} map[string]interface{} "Connection status or QR code"
+// @Failure 401 {string} string "Unauthorized: missing token"
+// @Failure 404 {string} string "Device not found or not loaded"
+// @Failure 500 {string} string "Failed to connect"
+// @Failure 504 {string} string "Timeout waiting for QR"
+// @Router /instance/connect [post]
 func (h *Handler) ConnectInstance(w http.ResponseWriter, r *http.Request) {
 	token := r.Header.Get("token")
 	if token == "" {
@@ -119,6 +143,7 @@ func (h *Handler) ConnectInstance(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// UazSendMessageRequest represents the payload for UazAPI message endpoints
 type UazSendMessageRequest struct {
 	Number string `json:"number"`
 	Text   string `json:"text,omitempty"`
@@ -153,6 +178,29 @@ type UazSendMessageRequest struct {
 	PixName string  `json:"pixName,omitempty"`
 }
 
+// SendUazGeneric handles all other UazAPI message types
+// @Summary Send UazAPI Message (Various Types)
+// @Description Sends different types of messages (contact, location, status, menu, carousel, payment, pix, presence) via UazAPI format. 
+// @Description To send presence, use `/message/presence` with `{ "number": "...", "presence": "composing" }`.
+// @Description For menus/lists, use `/send/menu` with `{ "number": "...", "listButton": "Ver", "choices": ["[Geral]", "Opção 1|op1"] }`.
+// @Tags uazapi-messages
+// @Accept json
+// @Produce json
+// @Param token header string true "Instance Token"
+// @Param request body UazSendMessageRequest true "Message Payload"
+// @Success 200 {object} map[string]interface{} "Message queued successfully"
+// @Failure 401 {string} string "Unauthorized: missing token"
+// @Failure 400 {string} string "Invalid request body"
+// @Failure 500 {string} string "Failed to enqueue message"
+// @Router /send/contact [post]
+// @Router /send/location [post]
+// @Router /message/presence [post]
+// @Router /send/status [post]
+// @Router /send/menu [post]
+// @Router /send/carousel [post]
+// @Router /send/location-button [post]
+// @Router /send/request-payment [post]
+// @Router /send/pix-button [post]
 func (h *Handler) SendUazGeneric(w http.ResponseWriter, r *http.Request) {
 	token := r.Header.Get("token")
 	if token == "" {
@@ -237,6 +285,19 @@ func (h *Handler) SendUazGeneric(w http.ResponseWriter, r *http.Request) {
 }
 
 
+// SendUazText sends a text message via UazAPI format
+// @Summary Send UazAPI Text Message
+// @Description Sends a simple text message in the UazAPI format. 
+// @Tags uazapi-messages
+// @Accept json
+// @Produce json
+// @Param token header string true "Instance Token"
+// @Param request body UazSendMessageRequest true "Text Message Payload"
+// @Success 200 {object} map[string]interface{} "Message queued successfully"
+// @Failure 401 {string} string "Unauthorized: missing token"
+// @Failure 400 {string} string "Invalid request body"
+// @Failure 500 {string} string "Failed to enqueue message"
+// @Router /send/text [post]
 func (h *Handler) SendUazText(w http.ResponseWriter, r *http.Request) {
 	token := r.Header.Get("token")
 	if token == "" {
@@ -280,6 +341,19 @@ func (h *Handler) SendUazText(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// SendUazMedia sends a media message via UazAPI format
+// @Summary Send UazAPI Media Message
+// @Description Sends a media message (image, video, audio, document) in the UazAPI format.
+// @Tags uazapi-messages
+// @Accept json
+// @Produce json
+// @Param token header string true "Instance Token"
+// @Param request body UazSendMessageRequest true "Media Message Payload"
+// @Success 200 {object} map[string]interface{} "Media queued successfully"
+// @Failure 401 {string} string "Unauthorized: missing token"
+// @Failure 400 {string} string "Invalid request body"
+// @Failure 500 {string} string "Failed to enqueue message"
+// @Router /send/media [post]
 func (h *Handler) SendUazMedia(w http.ResponseWriter, r *http.Request) {
 	token := r.Header.Get("token")
 	if token == "" {
