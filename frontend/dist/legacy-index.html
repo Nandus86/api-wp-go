@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WhatsMeow Basileia - Instances</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <style>
+        body {
+            font-family: sans-serif;
+            background: #f0f2f5;
+            padding: 2rem;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: auto;
+            background: white;
+            padding: 2rem;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        h1,
+        h2 {
+            color: #333;
+        }
+
+        .flex {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 2rem;
+        }
+
+        input[type="text"] {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            font-size: 16px;
+        }
+
+        button {
+            padding: 10px 20px;
+            background: #25D366;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: bold;
+        }
+
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 1rem;
+        }
+
+        th,
+        td {
+            text-align: left;
+            padding: 12px;
+            border-bottom: 1px solid #ddd;
+        }
+
+        th {
+            background-color: #f8f9fa;
+        }
+
+        .status-badge {
+            padding: 5px 10px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: bold;
+            color: white;
+        }
+
+        .status-connected {
+            background-color: #25D366;
+        }
+
+        .status-disconnected {
+            background-color: #ffc107;
+            color: black;
+        }
+
+        .status-unpaired {
+            background-color: #dc3545;
+        }
+
+        .status-offline {
+            background-color: #6c757d;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-content {
+            background: white;
+            padding: 2rem;
+            border-radius: 10px;
+            text-align: center;
+        }
+
+        #qrcode {
+            margin: 2rem auto;
+        }
+
+        button.btn-danger {
+            background: #dc3545;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>WhatsMeow Instances</h1>
+
+        <div class="flex">
+            <input type="text" id="instanceName" placeholder="Enter new instance name (e.g. My Business)">
+            <input type="text" id="instanceWebhook" placeholder="Optional Webhook URL (e.g. n8n flow)">
+            <input type="text" id="instanceProxy" placeholder="Optional Proxy URI (e.g. socks5://user:pass@IP)">
+            <button onclick="createInstance()">Create Instance</button>
+        </div>
+
+        <h2>Connected Instances</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Hash ID</th>
+                    <th>Status</th>
+                    <th>Webhook URL</th>
+                    <th>Proxy URI</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody id="instancesList">
+                <tr>
+                    <td colspan="6" style="text-align:center;">Loading instances...</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- QR Modal -->
+    <div id="qrModal" class="modal">
+        <div class="modal-content">
+            <h2 id="modalTitle">Scan QR Code</h2>
+            <div id="status">Waiting for QR...</div>
+            <div id="qrcode"></div>
+            <button class="btn-danger" onclick="closeModal()">Close / Cancel</button>
+        </div>
+    </div>
+
+    <script>
+        let currentModalDeviceID = null;
+        let ws = null;
+
+        function initWS() {
+            // Determine the WS protocol based on current page (ws / wss)
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${protocol}//${window.location.host}/api/ws`);
+
+            ws.onopen = () => console.log('WebSocket connected');
+            ws.onclose = () => {
+                console.log('WebSocket disconnected. Reconnecting...');
+                setTimeout(initWS, 5000);
+            };
+            ws.onerror = (err) => console.error('WebSocket error:', err);
+
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.type === 'qr' && data.device_id === currentModalDeviceID) {
+                        console.log("QR Code received via WS");
+                        document.getElementById('qrcode').innerHTML = "";
+                        new QRCode(document.getElementById('qrcode'), data.payload);
+                        document.getElementById('status').innerText = "Status: Scan QR";
+                    }
+                    if (data.type === 'status' && data.device_id === currentModalDeviceID) {
+                        if (data.payload === 'connected') {
+                            document.getElementById('status').innerText = "Status: Connected!";
+                            document.getElementById('qrcode').innerHTML = "<h1>✅</h1>";
+                            setTimeout(() => {
+                                closeModal();
+                                loadInstances();
+                            }, 2000);
+                        }
+                    }
+                } catch (e) {
+                    console.error("Failed to parse WS message", e);
+                }
+            };
+        }
+
+        async function loadInstances() {
+            try {
+                const res = await fetch('/api/device');
+                const instances = await res.json();
+                const tbody = document.getElementById('instancesList');
+                tbody.innerHTML = '';
+
+                if (!instances || instances.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;">No instances found</td></tr>';
+                    return;
+                }
+
+                instances.forEach(inst => {
+                    const tr = document.createElement('tr');
+
+                    let actionBtn = '';
+                    if (inst.status === 'unpaired' || inst.status === 'disconnected') {
+                        actionBtn = `<button onclick="connectInstance('${inst.id}', '${inst.name}')">Connect</button>`;
+                    } else if (inst.status === 'offline') {
+                        actionBtn = `<button class="btn-danger" onclick="alert('Not fully implemented online status check')">Offline Actions</button>`;
+                    } else {
+                        actionBtn = `<button disabled>Connected</button>`;
+                    }
+                    actionBtn += ` <button style="background:#007bff;" onclick="renameInstance('${inst.id}', '${inst.name}')">Rename</button>`;
+                    actionBtn += ` <button style="background:#6f42c1;" onclick="updateWebhook('${inst.id}', '${inst.webhook_url || ''}')">Webhook</button>`;
+                    actionBtn += ` <button style="background:#17a2b8;" onclick="updateProxy('${inst.id}', '${inst.proxy_uri || ''}')">Proxy</button>`;
+
+                    tr.innerHTML = `
+                        <td><strong>${inst.name}</strong></td>
+                        <td><small>${inst.id}</small></td>
+                        <td><span class="status-badge status-${inst.status}">${inst.status.toUpperCase()}</span></td>
+                        <td><small style="word-break: break-all; color: #555;">${inst.webhook_url || '<em>None</em>'}</small></td>
+                        <td><small style="word-break: break-all; color: #555;">${inst.proxy_uri || '<em>None</em>'}</small></td>
+                        <td>${actionBtn}</td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            } catch (error) {
+                console.error('Error loading instances:', error);
+            }
+        }
+
+        async function createInstance() {
+            const name = document.getElementById('instanceName').value.trim();
+            const webhookUrl = document.getElementById('instanceWebhook').value.trim();
+            const proxyUrl = document.getElementById('instanceProxy').value.trim();
+            if (!name) return alert('Enter an instance name!');
+
+            try {
+                const res = await fetch('/api/device', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: name, webhook_url: webhookUrl, proxy_uri: proxyUrl })
+                });
+
+                if (res.ok) {
+                    document.getElementById('instanceName').value = '';
+                    document.getElementById('instanceWebhook').value = '';
+                    document.getElementById('instanceProxy').value = '';
+                    loadInstances();
+                } else {
+                    alert('Error creating instance');
+                }
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        async function renameInstance(id, currentName) {
+            const newName = prompt("Enter new name for the instance:", currentName);
+            if (!newName || newName === currentName) return;
+
+            try {
+                const res = await fetch(`/api/device/${id}/rename`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: newName })
+                });
+
+                if (res.ok) {
+                    loadInstances();
+                } else {
+                    alert('Error renaming instance');
+                }
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        async function updateProxy(id, currentUri) {
+            const newUri = prompt("Enter new Proxy URI (socks5://user:pass@host:port or http://host:port) or leave blank to clear:", currentUri);
+            if (newUri === null || newUri === currentUri) return;
+
+            try {
+                const res = await fetch(`/api/device/${id}/proxy`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ proxy_uri: newUri })
+                });
+
+                if (res.ok) {
+                    loadInstances();
+                } else {
+                    alert('Error updating Proxy URI');
+                }
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        async function updateWebhook(id, currentUrl) {
+            const newUrl = prompt("Enter new Webhook URL for this instance:", currentUrl);
+            if (newUrl === null || newUrl === currentUrl) return;
+
+            try {
+                const res = await fetch(`/api/device/${id}/webhook`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ webhook_url: newUrl })
+                });
+
+                if (res.ok) {
+                    loadInstances();
+                } else {
+                    alert('Error updating webhook URL');
+                }
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        function connectInstance(deviceID, name) {
+            currentModalDeviceID = deviceID;
+            document.getElementById('modalTitle').innerText = `Scan QR for: ${name}`;
+            document.getElementById('qrModal').style.display = 'flex';
+            document.getElementById('status').innerText = "Status: Fetching QR Stream...";
+            document.getElementById('qrcode').innerHTML = "";
+            fetch(`/api/device/${deviceID}/qr`).catch(e => console.error(e));
+        }
+
+        function closeModal() {
+            currentModalDeviceID = null;
+            document.getElementById('qrModal').style.display = 'none';
+            loadInstances();
+        }
+
+        // Auto load on boot
+        initWS();
+        loadInstances();
+        setInterval(loadInstances, 10000); // Poll every 10s
+    </script>
+</body>
+
+</html>

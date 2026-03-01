@@ -90,6 +90,17 @@ func (h *Handler) Router() http.Handler {
 		httpSwagger.URL("/docs/doc.json"), //The url pointing to API definition
 	))
 
+	// Uazapi compatible routes
+	r.Route("/instance", func(r chi.Router) {
+		r.Post("/init", h.InitInstance)
+		r.Post("/connect", h.ConnectInstance)
+		// r.Get("/all", h.ListInstancesUaz) // To be added later if needed
+	})
+	r.Route("/send", func(r chi.Router) {
+		r.Post("/text", h.SendUazText)
+		r.Post("/media", h.SendUazMedia)
+	})
+
 	return r
 }
 
