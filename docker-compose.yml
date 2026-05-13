@@ -1,6 +1,6 @@
 services:
   app:
-    build: .
+    build: ./backend
     container_name: whatsmeow-app
     # Removed direct port mapping to 8179 to force all traffic through Nginx
     environment:
