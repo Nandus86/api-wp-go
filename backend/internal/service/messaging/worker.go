@@ -129,11 +129,21 @@ func (w *Worker) handleSendMessage(body []byte) error {
 	if payload.Type == "status" {
 		remoteJID = types.NewJID("status", "broadcast")
 	} else {
-		var parseErr error
-		remoteJID, parseErr = types.ParseJID(payload.Number + "@s.whatsapp.net")
-		if parseErr != nil {
-			w.logger.Error("Invalid phone number format", zap.Error(parseErr))
-			return nil
+		// Auto-correct number formatting (solves 9th digit in BR) using WhatsApp's directory
+		isVerified := false
+		resp, err := client.IsOnWhatsApp([]string{payload.Number})
+		if err == nil && len(resp) > 0 && resp[0].IsIn {
+			remoteJID = resp[0].JID
+			isVerified = true
+		}
+
+		if !isVerified {
+			var parseErr error
+			remoteJID, parseErr = types.ParseJID(payload.Number + "@s.whatsapp.net")
+			if parseErr != nil {
+				w.logger.Error("Invalid phone number format", zap.Error(parseErr))
+				return nil
+			}
 		}
 	}
 

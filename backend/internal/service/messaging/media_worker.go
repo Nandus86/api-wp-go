@@ -81,10 +81,22 @@ func (w *MediaWorker) handleSendMedia(body []byte) error {
 		return fmt.Errorf("device not connected")
 	}
 
-	remoteJID, err := types.ParseJID(payload.Number + "@s.whatsapp.net")
-	if err != nil {
-		w.logger.Error("Invalid phone number format", zap.Error(err))
-		return nil
+	// Auto-correct number formatting (solves 9th digit in BR) using WhatsApp's directory
+	var remoteJID types.JID
+	isVerified := false
+	respWA, errWA := client.IsOnWhatsApp([]string{payload.Number})
+	if errWA == nil && len(respWA) > 0 && respWA[0].IsIn {
+		remoteJID = respWA[0].JID
+		isVerified = true
+	}
+
+	if !isVerified {
+		var parseErr error
+		remoteJID, parseErr = types.ParseJID(payload.Number + "@s.whatsapp.net")
+		if parseErr != nil {
+			w.logger.Error("Invalid phone number format", zap.Error(parseErr))
+			return nil
+		}
 	}
 
 	// Map type to whatsmeow.MediaType
