@@ -233,11 +233,22 @@ func (h *Handler) GetQR(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, ": connected\n\n")
 	flusher.Flush()
 
+	// Keep-alive ticker to prevent Traefik/Nginx from dropping idle connections
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-r.Context().Done():
 			logger.Info("SSE client disconnected", zap.String("device", deviceID))
 			return
+		case <-ticker.C:
+			// Send a comment ping to keep connection alive
+			_, err := fmt.Fprintf(w, ": ping\n\n")
+			if err != nil {
+				return
+			}
+			flusher.Flush()
 		case code, ok := <-qrChan:
 			if !ok {
 				logger.Info("QR channel closed", zap.String("device", deviceID))
