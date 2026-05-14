@@ -310,12 +310,14 @@ func (m *MultiClientManager) ListInstances() []Instance {
 
         client, exists := m.clients[dbInst.ID]
         if exists {
-            if client.IsConnected() {
-                status = "connected"
-            } else if client.IsLoggedIn() { // Client exists and has logged in before, but is not currently connected
-                status = "reconnecting"
+            if client.IsLoggedIn() {
+                if client.IsConnected() {
+                    status = "connected"
+                } else {
+                    status = "reconnecting"
+                }
             } else {
-                // Client exists but is not connected and not logged in (e.g., store is empty)
+                // Client exists but is not logged in (waiting for QR)
                 status = "unpaired"
             }
         }

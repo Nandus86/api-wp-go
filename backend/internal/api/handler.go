@@ -364,7 +364,7 @@ func (h *Handler) GetStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	status := "disconnected"
-	if client.IsConnected() {
+	if client.IsLoggedIn() {
 		status = "connected"
 	}
 
