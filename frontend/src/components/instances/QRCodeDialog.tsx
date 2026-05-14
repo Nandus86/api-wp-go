@@ -28,20 +28,26 @@ export function QRCodeDialog({ isOpen, instanceId, instanceName, onClose, onConn
         let eventSource: EventSource | null = null
         let pollInterval: number | null = null
 
+        let retryCount = 0
+        const maxRetries = 5
+
         const connectSSE = () => {
-            setStatus('connecting')
+            if (retryCount >= maxRetries) {
+                setStatus('error')
+                setErrorMsg('Failed to connect after multiple attempts. Please try again.')
+                return
+            }
+
             eventSource = new EventSource(`${API_BASE}/device/${instanceId}/qr`)
 
             eventSource.onopen = () => {
                 console.log('SSE connection opened');
                 setStatus('waiting_scan')
+                retryCount = 0 // Reset on success
             }
 
             eventSource.onmessage = (event) => {
-                console.log('SSE message received', event.data);
-                // Force state out of connecting when first message bursts in
                 setStatus('waiting_scan')
-
                 if (event.data && event.data.trim() !== '' && event.data !== 'connected') {
                     setQrCode(event.data)
                 }
@@ -49,10 +55,16 @@ export function QRCodeDialog({ isOpen, instanceId, instanceName, onClose, onConn
 
             eventSource.onerror = (err) => {
                 console.error('SSE Error:', err)
-                setStatus('error')
-                setErrorMsg('Lost connection to pairing server')
-                toast.error('Lost connection to pairing server')
                 eventSource?.close()
+                
+                // Retry logic
+                retryCount++
+                console.log(`Retrying SSE connection (${retryCount}/${maxRetries})...`)
+                setTimeout(() => {
+                    if (isOpen && status !== 'connected') {
+                        connectSSE()
+                    }
+                }, 2000)
             }
         }
 
