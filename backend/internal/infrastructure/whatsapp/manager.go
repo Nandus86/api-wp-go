@@ -46,8 +46,7 @@ func NewMultiClientManager(dbDialect, dbAddress string, dispatcher *EventDispatc
         rmqClient: rmqClient,
 	}
 
-    // Register Webhook Event Forwarder
-    manager.registerWebhookForwarder()
+    // Load existing instances
 
     // Load existing instances
     instances, err := instanceStore.GetAllInstances()
@@ -62,6 +61,13 @@ func NewMultiClientManager(dbDialect, dbAddress string, dispatcher *EventDispatc
             device, err := container.GetDevice(context.Background(), jid)
             if err == nil && device != nil {
                 client := whatsmeow.NewClient(device, waLog.Stdout("Client", "DEBUG", true))
+                if instance.ProxyURI != "" {
+                    err := client.SetProxyAddress(instance.ProxyURI)
+                    if err != nil {
+                        waLog.Stdout("Manager", "ERROR", true).Infof("Failed to set proxy for device %s: %v", instance.ID, err)
+                    }
+                }
+                
                 // Attach device ID to client context or pass it somehow if needed, but here we can just capture it
                 manager.clients[instance.ID] = client
                 
@@ -91,56 +97,51 @@ func (m *MultiClientManager) handleEvent(deviceID string, evt interface{}) {
 		if v.Message != nil && (v.Message.GetInteractiveMessage() != nil || v.Message.GetViewOnceMessage() != nil || v.Message.GetViewOnceMessageV2() != nil || v.Message.GetViewOnceMessageV2Extension() != nil || v.Message.GetTemplateMessage() != nil || v.Message.GetButtonsMessage() != nil || v.Message.GetListMessage() != nil) {
 			waLog.Stdout("Sniffer", "INFO", true).Infof("\n\n====== INTERACTIVE MESSAGE SNIFFED ======\nJID: %s\nDeviceID: %d\nProtobuf:\n%+v\n==========================================\n\n", v.Info.Sender.String(), v.Info.Sender.Device, v.Message)
 		}
+
+        // Webhook forwarding
+        if m.rmqClient != nil {
+            inst, err := m.instanceStore.GetInstanceByID(deviceID)
+            webhookUrl := ""
+            if err == nil && inst != nil {
+                webhookUrl = inst.WebhookURL
+            }
+
+            payload := map[string]interface{}{
+                "event": "messages.upsert",
+                "instance_id": deviceID,
+                "webhook_url": webhookUrl,
+                "data": map[string]interface{}{
+                    "message": map[string]interface{}{
+                        "conversation": v.Message.GetConversation(),
+                    },
+                    "key": map[string]interface{}{
+                        "remoteJid": v.Info.Chat.String(),
+                        "fromMe": v.Info.IsFromMe,
+                        "id": v.Info.ID,
+                    },
+                    "pushName": v.Info.PushName,
+                    "timestamp": v.Info.Timestamp.Unix(),
+                },
+            }
+
+            if v.Message.GetExtendedTextMessage() != nil {
+                 payload["data"].(map[string]interface{})["message"].(map[string]interface{})["conversation"] = v.Message.GetExtendedTextMessage().GetText()
+            }
+
+            body, err := json.Marshal(payload)
+            if err == nil {
+                m.rmqClient.Publish(context.Background(), "webhook_events_queue", body)
+            }
+        }
 	case *events.Receipt:
         // Also trace delivered/sent if needed, but usually we just track messages sent directly in the worker or when events.Message fromMe=true arrives.
 	}
     m.dispatcher.Dispatch(evt)
 }
 
-// registerWebhookForwarder listens to internal dispatcher events, wraps them
-// in a standard JSON format, and publishes them to RabbitMQ for webhook delivery.
-func (m *MultiClientManager) registerWebhookForwarder() {
-    if m.rmqClient == nil {
-        return
-    }
 
-    m.dispatcher.Register(&events.Message{}, func(evt interface{}) {
-        msg, ok := evt.(*events.Message)
-        if !ok {
-            return
-        }
 
-        // Extremely simplified payload for the n8n webhook
-        payload := map[string]interface{}{
-            "event": "messages.upsert",
-            "data": map[string]interface{}{
-                "message": map[string]interface{}{
-                    "conversation": msg.Message.GetConversation(),
-                },
-                "key": map[string]interface{}{
-                    "remoteJid": msg.Info.Chat.String(),
-                    "fromMe": msg.Info.IsFromMe,
-                    "id": msg.Info.ID,
-                },
-                "pushName": msg.Info.PushName,
-                "timestamp": msg.Info.Timestamp.Unix(),
-            },
-        }
-
-        if msg.Message.GetExtendedTextMessage() != nil {
-             payload["data"].(map[string]interface{})["message"].(map[string]interface{})["conversation"] = msg.Message.GetExtendedTextMessage().GetText()
-        }
-
-        body, err := json.Marshal(payload)
-        if err == nil {
-            m.rmqClient.Publish(context.Background(), "webhook_events_queue", body)
-        }
-    })
-    
-    // We can add more events like Receipt, Presence, etc here over time
-}
-
-func (m *MultiClientManager) NewClientWithName(name string) (string, *whatsmeow.Client, error) {
+func (m *MultiClientManager) NewClientWithName(name, webhookURL, proxyURI string) (string, *whatsmeow.Client, error) {
     m.mu.Lock()
     defer m.mu.Unlock()
 
@@ -154,13 +155,19 @@ func (m *MultiClientManager) NewClientWithName(name string) (string, *whatsmeow.
         return "", nil, fmt.Errorf("client already exists")
     }
 
-    err := m.instanceStore.CreateInstance(deviceID, name)
+    err := m.instanceStore.CreateInstance(deviceID, name, webhookURL, proxyURI)
     if err != nil {
         return "", nil, fmt.Errorf("failed to save instance to db: %w", err)
     }
 
     device := m.container.NewDevice()
     client := whatsmeow.NewClient(device, waLog.Stdout("Client", "DEBUG", true))
+    if proxyURI != "" {
+        err := client.SetProxyAddress(proxyURI)
+        if err != nil {
+            waLog.Stdout("Manager", "ERROR", true).Infof("Failed to set proxy for device %s: %v", deviceID, err)
+        }
+    }
     m.clients[deviceID] = client
 
     // Wrap event handler to catch PAIRING success and save JID
@@ -253,6 +260,40 @@ func (m *MultiClientManager) RenameInstance(id, newName string) error {
     if err != nil {
          return fmt.Errorf("failed to rename instance in db: %w", err)
     }
+    return nil
+}
+
+// UpdateInstanceWebhook updates the webhook url of an instance
+func (m *MultiClientManager) UpdateInstanceWebhook(id, webhookURL string) error {
+    m.mu.Lock()
+    defer m.mu.Unlock()
+
+    err := m.instanceStore.UpdateInstanceWebhook(id, webhookURL)
+    if err != nil {
+         return fmt.Errorf("failed to update webhook in db: %w", err)
+    }
+    return nil
+}
+
+// UpdateInstanceProxy updates the proxy uri of an instance
+func (m *MultiClientManager) UpdateInstanceProxy(id, proxyURI string) error {
+    m.mu.Lock()
+    defer m.mu.Unlock()
+
+    err := m.instanceStore.UpdateInstanceProxy(id, proxyURI)
+    if err != nil {
+         return fmt.Errorf("failed to update proxy in db: %w", err)
+    }
+
+    client, exists := m.clients[id]
+    if exists {
+        if proxyURI != "" {
+            client.SetProxyAddress(proxyURI)
+        } else {
+            client.SetProxy(nil)
+        }
+    }
+
     return nil
 }
 

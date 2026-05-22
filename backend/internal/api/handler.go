@@ -77,6 +77,8 @@ func (h *Handler) Router() http.Handler {
 	r.Put("/device/{id}/rename", h.RenameDevice)
 	r.Delete("/device/{id}", h.DeleteDevice)
 	r.Post("/device/{id}/reconnect", h.ReconnectDevice)
+	r.Put("/device/{id}/webhook", h.UpdateDeviceWebhook)
+	r.Put("/device/{id}/proxy", h.UpdateDeviceProxy)
 	r.Get("/device/{id}/qr", h.GetQR)
 	r.Get("/device/{id}/status", h.GetStatus)
 	r.Post("/message/send", h.SendText)
@@ -114,7 +116,17 @@ func (h *Handler) Router() http.Handler {
 }
 
 type CreateDeviceRequest struct {
-	Name string `json:"name"`
+	Name       string `json:"name"`
+	WebhookURL string `json:"webhook_url"`
+	ProxyURI   string `json:"proxy_uri"`
+}
+
+type UpdateWebhookRequest struct {
+	WebhookURL string `json:"webhook_url"`
+}
+
+type UpdateProxyRequest struct {
+	ProxyURI string `json:"proxy_uri"`
 }
 
 // CreateDevice creates a new WhatsApp device session
@@ -137,7 +149,7 @@ func (h *Handler) CreateDevice(w http.ResponseWriter, r *http.Request) {
 		req.Name = "Instance-" + time.Now().Format("150405")
 	}
 
-	deviceID, _, err := h.manager.NewClientWithName(req.Name)
+	deviceID, _, err := h.manager.NewClientWithName(req.Name, req.WebhookURL, req.ProxyURI)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -148,6 +160,62 @@ func (h *Handler) CreateDevice(w http.ResponseWriter, r *http.Request) {
 		"device_id": deviceID,
 		"name":      req.Name,
 	})
+}
+
+// UpdateDeviceWebhook updates the webhook url for a device
+// @Summary Update device webhook
+// @Description Updates the webhook url of an existing device/instance
+// @Tags device
+// @Accept json
+// @Produce json
+// @Param id path string true "Device ID"
+// @Param request body UpdateWebhookRequest true "Webhook URL"
+// @Success 200 {object} map[string]string
+// @Router /device/{id}/webhook [put]
+func (h *Handler) UpdateDeviceWebhook(w http.ResponseWriter, r *http.Request) {
+	deviceID := chi.URLParam(r, "id")
+	var req UpdateWebhookRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	err := h.manager.UpdateInstanceWebhook(deviceID, req.WebhookURL)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "success", "device_id": deviceID, "webhook_url": req.WebhookURL})
+}
+
+// UpdateDeviceProxy updates the proxy uri for a device
+// @Summary Update device proxy
+// @Description Updates the proxy uri of an existing device/instance
+// @Tags device
+// @Accept json
+// @Produce json
+// @Param id path string true "Device ID"
+// @Param request body UpdateProxyRequest true "Proxy URI"
+// @Success 200 {object} map[string]string
+// @Router /device/{id}/proxy [put]
+func (h *Handler) UpdateDeviceProxy(w http.ResponseWriter, r *http.Request) {
+	deviceID := chi.URLParam(r, "id")
+	var req UpdateProxyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	err := h.manager.UpdateInstanceProxy(deviceID, req.ProxyURI)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "success", "device_id": deviceID, "proxy_uri": req.ProxyURI})
 }
 
 // ListDevices returns a list of all connected devices with their details

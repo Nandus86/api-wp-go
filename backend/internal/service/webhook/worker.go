@@ -2,6 +2,7 @@ package webhook
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
@@ -27,22 +28,32 @@ func NewWorker(rmqClient *rabbitmq.Client, logger *zap.Logger, webhookURL string
 }
 
 func (w *Worker) Start() {
-	if w.webhookURL == "" {
-		w.logger.Warn("WebhookURL is empty, webhook worker will not start")
-		return
-	}
-
 	err := w.rmqClient.Consume("webhook_events_queue", w.handleWebhookEvent)
 	if err != nil {
 		w.logger.Error("Failed to start consuming webhook_events_queue", zap.Error(err))
 	} else {
-		w.logger.Info("Started RabbitMQ worker for webhook_events_queue", zap.String("url", w.webhookURL))
+		w.logger.Info("Started RabbitMQ worker for webhook_events_queue", zap.String("global_url", w.webhookURL))
 	}
 }
 
 func (w *Worker) handleWebhookEvent(body []byte) error {
+	var payload struct {
+		WebhookURL string `json:"webhook_url"`
+	}
+	json.Unmarshal(body, &payload)
+
+	targetURL := payload.WebhookURL
+	if targetURL == "" {
+		targetURL = w.webhookURL
+	}
+
+	if targetURL == "" {
+		// No webhook URL configured (neither instance nor global), drop message
+		return nil
+	}
+
 	// We just POST the raw JSON body to the configured Webhook URL
-	req, err := http.NewRequest(http.MethodPost, w.webhookURL, bytes.NewBuffer(body))
+	req, err := http.NewRequest(http.MethodPost, targetURL, bytes.NewBuffer(body))
 	if err != nil {
 		w.logger.Error("Failed to create webhook request", zap.Error(err))
 		return nil // Drop message

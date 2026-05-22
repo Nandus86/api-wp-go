@@ -6,10 +6,12 @@ import (
 )
 
 type Instance struct {
-    ID     string `json:"id"`
-    Name   string `json:"name"`
-    JID    string `json:"jid"`
-    Status string `json:"status"`
+    ID         string `json:"id"`
+    Name       string `json:"name"`
+    JID        string `json:"jid"`
+    Status     string `json:"status"`
+    WebhookURL string `json:"webhook_url"`
+    ProxyURI   string `json:"proxy_uri"`
 }
 
 type InstanceStore struct {
@@ -25,10 +27,22 @@ func NewInstanceStore(dbDialect, dbAddress string) (*InstanceStore, error) {
     _, err = db.Exec(`CREATE TABLE IF NOT EXISTS instances (
         id VARCHAR PRIMARY KEY,
         name VARCHAR NOT NULL,
-        jid VARCHAR
+        jid VARCHAR,
+        webhook_url VARCHAR,
+        proxy_uri VARCHAR
     )`)
     if err != nil {
         return nil, err
+    }
+
+    _, err = db.Exec(`ALTER TABLE instances ADD COLUMN IF NOT EXISTS webhook_url VARCHAR`)
+    if err != nil {
+        // ignore error if column exists or alter not supported
+    }
+
+    _, err = db.Exec(`ALTER TABLE instances ADD COLUMN IF NOT EXISTS proxy_uri VARCHAR`)
+    if err != nil {
+        // ignore error
     }
 
     _, err = db.Exec(`CREATE TABLE IF NOT EXISTS message_stats (
@@ -45,8 +59,18 @@ func NewInstanceStore(dbDialect, dbAddress string) (*InstanceStore, error) {
     return &InstanceStore{db: db}, nil
 }
 
-func (s *InstanceStore) CreateInstance(id, name string) error {
-    _, err := s.db.Exec(`INSERT INTO instances (id, name, jid) VALUES ($1, $2, '')`, id, name)
+func (s *InstanceStore) CreateInstance(id, name, webhookURL, proxyURI string) error {
+    _, err := s.db.Exec(`INSERT INTO instances (id, name, jid, webhook_url, proxy_uri) VALUES ($1, $2, '', $3, $4)`, id, name, webhookURL, proxyURI)
+    return err
+}
+
+func (s *InstanceStore) UpdateInstanceWebhook(id, webhookURL string) error {
+    _, err := s.db.Exec(`UPDATE instances SET webhook_url = $1 WHERE id = $2`, webhookURL, id)
+    return err
+}
+
+func (s *InstanceStore) UpdateInstanceProxy(id, proxyURI string) error {
+    _, err := s.db.Exec(`UPDATE instances SET proxy_uri = $1 WHERE id = $2`, proxyURI, id)
     return err
 }
 
@@ -61,9 +85,9 @@ func (s *InstanceStore) RenameInstance(id, name string) error {
 }
 
 func (s *InstanceStore) GetInstanceByID(id string) (*Instance, error) {
-    row := s.db.QueryRow(`SELECT id, name, jid FROM instances WHERE id = $1`, id)
+    row := s.db.QueryRow(`SELECT id, name, jid, COALESCE(webhook_url, ''), COALESCE(proxy_uri, '') FROM instances WHERE id = $1`, id)
     var i Instance
-    err := row.Scan(&i.ID, &i.Name, &i.JID)
+    err := row.Scan(&i.ID, &i.Name, &i.JID, &i.WebhookURL, &i.ProxyURI)
     if err != nil {
         return nil, err
     }
@@ -71,7 +95,7 @@ func (s *InstanceStore) GetInstanceByID(id string) (*Instance, error) {
 }
 
 func (s *InstanceStore) GetAllInstances() ([]Instance, error) {
-    rows, err := s.db.Query(`SELECT id, name, jid FROM instances`)
+    rows, err := s.db.Query(`SELECT id, name, jid, COALESCE(webhook_url, ''), COALESCE(proxy_uri, '') FROM instances`)
     if err != nil {
         return nil, err
     }
@@ -80,7 +104,7 @@ func (s *InstanceStore) GetAllInstances() ([]Instance, error) {
     var instances []Instance
     for rows.Next() {
         var i Instance
-        if err := rows.Scan(&i.ID, &i.Name, &i.JID); err != nil {
+        if err := rows.Scan(&i.ID, &i.Name, &i.JID, &i.WebhookURL, &i.ProxyURI); err != nil {
             return nil, err
         }
         instances = append(instances, i)
