@@ -131,7 +131,7 @@ func (w *Worker) handleSendMessage(body []byte) error {
 	} else {
 		// Auto-correct number formatting (solves 9th digit in BR) using WhatsApp's directory
 		isVerified := false
-		resp, err := client.IsOnWhatsApp([]string{payload.Number})
+		resp, err := client.IsOnWhatsApp(context.Background(), []string{payload.Number})
 		if err == nil && len(resp) > 0 && resp[0].IsIn {
 			remoteJID = resp[0].JID
 			isVerified = true
