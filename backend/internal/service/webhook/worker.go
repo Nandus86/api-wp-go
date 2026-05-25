@@ -52,27 +52,32 @@ func (w *Worker) handleWebhookEvent(body []byte) error {
 		return nil
 	}
 
-	// We just POST the raw JSON body to the configured Webhook URL
-	req, err := http.NewRequest(http.MethodPost, targetURL, bytes.NewBuffer(body))
-	if err != nil {
-		w.logger.Error("Failed to create webhook request", zap.Error(err))
-		return nil // Drop message
+	maxRetries := 3
+	for i := 0; i < maxRetries; i++ {
+		req, err := http.NewRequest(http.MethodPost, targetURL, bytes.NewBuffer(body))
+		if err != nil {
+			w.logger.Error("Failed to create webhook request", zap.Error(err))
+			return nil // Drop message
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := w.httpClient.Do(req)
+		if err != nil {
+			w.logger.Error("Failed to send webhook, will retry", zap.Error(err), zap.Int("attempt", i+1))
+		} else {
+			resp.Body.Close()
+			if resp.StatusCode < 400 {
+				w.logger.Info("Webhook dispatched successfully", zap.Int("status", resp.StatusCode))
+				return nil
+			}
+			w.logger.Warn("Webhook received non-2xx response, will retry", zap.Int("status", resp.StatusCode), zap.Int("attempt", i+1))
+		}
+
+		if i < maxRetries-1 {
+			time.Sleep(time.Duration(i+1) * 2 * time.Second) // backoff: 2s, 4s
+		}
 	}
 
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := w.httpClient.Do(req)
-	if err != nil {
-		w.logger.Error("Failed to send webhook, will retry", zap.Error(err))
-		return err // Return err so RabbitMQ requeues it
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		w.logger.Warn("Webhook received non-2xx response, will retry", zap.Int("status", resp.StatusCode))
-		return fmt.Errorf("non-2xx response from webhook: %d", resp.StatusCode)
-	}
-
-	w.logger.Info("Webhook dispatched successfully", zap.Int("status", resp.StatusCode))
+	w.logger.Error("Webhook failed after max retries, dropping message")
 	return nil
 }
