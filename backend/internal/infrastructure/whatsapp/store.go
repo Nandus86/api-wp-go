@@ -46,10 +46,6 @@ func NewInstanceStore(dbDialect, dbAddress string) (*InstanceStore, error) {
         // ignore error
     }
 
-    _, err = db.Exec(`ALTER TABLE instances ADD COLUMN IF NOT EXISTS api_key VARCHAR`)
-    if err != nil {
-        // ignore error
-    }
 
     _, err = db.Exec(`CREATE TABLE IF NOT EXISTS message_stats (
         id SERIAL PRIMARY KEY,
