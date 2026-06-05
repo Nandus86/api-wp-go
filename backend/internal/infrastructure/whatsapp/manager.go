@@ -252,11 +252,14 @@ func (m *MultiClientManager) handleEvent(deviceID string, evt interface{}) {
 	case *events.GroupInfo:
 		if m.rmqClient != nil {
 			groupJID := m.resolveLID(deviceID, v.JID)
-			senderJID := m.resolveLID(deviceID, v.Sender)
+			var senderStr string
+			if v.Sender != nil {
+				senderStr = m.resolveLID(deviceID, *v.Sender).String()
+			}
 
 			data := map[string]interface{}{
 				"groupId":   groupJID.String(),
-				"sender":    senderJID.String(),
+				"sender":    senderStr,
 				"timestamp": v.Timestamp.Unix(),
 			}
 			if v.Name != nil {
