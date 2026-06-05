@@ -81,6 +81,7 @@ func (h *Handler) Router() http.Handler {
 	r.Put("/device/{id}/proxy", h.UpdateDeviceProxy)
 	r.Get("/device/{id}/qr", h.GetQR)
 	r.Get("/device/{id}/status", h.GetStatus)
+	r.Put("/device/{id}/credentials", h.UpdateDeviceCredentials)
 	r.Post("/message/send", h.SendText)
 	r.Post("/message/interactive/button", h.SendInteractiveButton)
 	r.Post("/message/interactive/copy", h.SendInteractiveCopyButton)
@@ -116,6 +117,8 @@ func (h *Handler) Router() http.Handler {
 }
 
 type CreateDeviceRequest struct {
+	ID         string `json:"id,omitempty"`
+	APIKey     string `json:"api_key,omitempty"`
 	Name       string `json:"name"`
 	WebhookURL string `json:"webhook_url"`
 	ProxyURI   string `json:"proxy_uri"`
@@ -149,7 +152,7 @@ func (h *Handler) CreateDevice(w http.ResponseWriter, r *http.Request) {
 		req.Name = "Instance-" + time.Now().Format("150405")
 	}
 
-	deviceID, _, err := h.manager.NewClientWithName(req.Name, req.WebhookURL, req.ProxyURI)
+	deviceID, apiKey, _, err := h.manager.NewClientWithName(req.ID, req.APIKey, req.Name, req.WebhookURL, req.ProxyURI)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -158,6 +161,7 @@ func (h *Handler) CreateDevice(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
 		"device_id": deviceID,
+		"api_key":   apiKey,
 		"name":      req.Name,
 	})
 }
@@ -580,4 +584,46 @@ func (h *Handler) SendInteractiveCopyButton(w http.ResponseWriter, r *http.Reque
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "queued"})
+}
+
+type UpdateCredentialsRequest struct {
+	NewID     string `json:"new_id"`
+	NewAPIKey string `json:"new_api_key"`
+}
+
+// UpdateDeviceCredentials updates the device ID and/or API Key
+// @Summary Update device credentials
+// @Description Updates the device ID and/or API Key for an existing instance
+// @Tags device
+// @Accept json
+// @Produce json
+// @Param id path string true "Device ID"
+// @Param request body UpdateCredentialsRequest true "Credentials Update Request"
+// @Success 200 {object} map[string]string
+// @Router /device/{id}/credentials [put]
+func (h *Handler) UpdateDeviceCredentials(w http.ResponseWriter, r *http.Request) {
+	deviceID := chi.URLParam(r, "id")
+	var req UpdateCredentialsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.NewID == "" || req.NewAPIKey == "" {
+		http.Error(w, "new_id and new_api_key are required", http.StatusBadRequest)
+		return
+	}
+
+	err := h.manager.UpdateCredentials(deviceID, req.NewID, req.NewAPIKey)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":    "success",
+		"device_id": req.NewID,
+		"api_key":   req.NewAPIKey,
+	})
 }

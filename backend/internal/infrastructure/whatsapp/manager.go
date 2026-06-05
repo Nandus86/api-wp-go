@@ -3,6 +3,7 @@ package whatsapp
 import (
 	"context"
 	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"sync"
 
@@ -18,12 +19,14 @@ import (
 )
 
 type MultiClientManager struct {
-	container *sqlstore.Container
-	clients   map[string]*whatsmeow.Client
-	mu        sync.RWMutex
-    dispatcher *EventDispatcher
-    instanceStore *InstanceStore
-    rmqClient *rabbitmq.Client
+	container     *sqlstore.Container
+	clients       map[string]*whatsmeow.Client
+	apiKeys       map[string]string // Maps apiKey -> deviceID
+	clientIDs     map[*whatsmeow.Client]string // Maps client -> deviceID
+	mu            sync.RWMutex
+	dispatcher    *EventDispatcher
+	instanceStore *InstanceStore
+	rmqClient     *rabbitmq.Client
 }
 
 func NewMultiClientManager(dbDialect, dbAddress string, dispatcher *EventDispatcher, rmqClient *rabbitmq.Client) (*MultiClientManager, error) {
@@ -39,14 +42,14 @@ func NewMultiClientManager(dbDialect, dbAddress string, dispatcher *EventDispatc
     }
 
 	manager := &MultiClientManager{
-		container: container,
-		clients:   make(map[string]*whatsmeow.Client),
-        dispatcher: dispatcher,
-        instanceStore: instanceStore,
-        rmqClient: rmqClient,
+		container:     container,
+		clients:       make(map[string]*whatsmeow.Client),
+		apiKeys:       make(map[string]string),
+		clientIDs:     make(map[*whatsmeow.Client]string),
+		dispatcher:    dispatcher,
+		instanceStore: instanceStore,
+		rmqClient:     rmqClient,
 	}
-
-    // Load existing instances
 
     // Load existing instances
     instances, err := instanceStore.GetAllInstances()
@@ -56,6 +59,10 @@ func NewMultiClientManager(dbDialect, dbAddress string, dispatcher *EventDispatc
 
     // Initialize clients for paired instances
     for _, instance := range instances {
+        if instance.APIKey != "" {
+            manager.apiKeys[instance.APIKey] = instance.ID
+        }
+
         if instance.JID != "" {
             jid, _ := types.ParseJID(instance.JID)
             device, err := container.GetDevice(context.Background(), jid)
@@ -68,12 +75,15 @@ func NewMultiClientManager(dbDialect, dbAddress string, dispatcher *EventDispatc
                     }
                 }
                 
-                // Attach device ID to client context or pass it somehow if needed, but here we can just capture it
                 manager.clients[instance.ID] = client
+                manager.clientIDs[client] = instance.ID
                 
-                // Wrap handleEvent to pass the deviceID
+                // Wrap handleEvent to pass the deviceID dynamically
                 client.AddEventHandler(func(evt interface{}) {
-                    manager.handleEvent(instance.ID, evt)
+                    manager.mu.RLock()
+                    currentID := manager.clientIDs[client]
+                    manager.mu.RUnlock()
+                    manager.handleEvent(currentID, evt)
                 })
                 go client.Connect()
             }
@@ -141,23 +151,33 @@ func (m *MultiClientManager) handleEvent(deviceID string, evt interface{}) {
 
 
 
-func (m *MultiClientManager) NewClientWithName(name, webhookURL, proxyURI string) (string, *whatsmeow.Client, error) {
+func (m *MultiClientManager) NewClientWithName(id, apiKey, name, webhookURL, proxyURI string) (string, string, *whatsmeow.Client, error) {
     m.mu.Lock()
     defer m.mu.Unlock()
 
-    u := make([]byte, 16)
-    rand.Read(u)
-    u[8] = (u[8] | 0x80) & 0xBF
-    u[6] = (u[6] | 0x40) & 0x4F
-    deviceID := fmt.Sprintf("%x-%x-%x-%x-%x", u[0:4], u[4:6], u[6:8], u[8:10], u[10:])
-
-    if _, exists := m.clients[deviceID]; exists {
-        return "", nil, fmt.Errorf("client already exists")
+    deviceID := id
+    if deviceID == "" {
+        u := make([]byte, 12)
+        rand.Read(u)
+        deviceID = hex.EncodeToString(u)
     }
 
-    err := m.instanceStore.CreateInstance(deviceID, name, webhookURL, proxyURI)
+    key := apiKey
+    if key == "" {
+        u := make([]byte, 16)
+        rand.Read(u)
+        u[8] = (u[8] | 0x80) & 0xBF
+        u[6] = (u[6] | 0x40) & 0x4F
+        key = fmt.Sprintf("%x-%x-%x-%x-%x", u[0:4], u[4:6], u[6:8], u[8:10], u[10:])
+    }
+
+    if _, exists := m.clients[deviceID]; exists {
+        return "", "", nil, fmt.Errorf("client already exists")
+    }
+
+    err := m.instanceStore.CreateInstance(deviceID, key, name, webhookURL, proxyURI)
     if err != nil {
-        return "", nil, fmt.Errorf("failed to save instance to db: %w", err)
+        return "", "", nil, fmt.Errorf("failed to save instance to db: %w", err)
     }
 
     device := m.container.NewDevice()
@@ -169,25 +189,40 @@ func (m *MultiClientManager) NewClientWithName(name, webhookURL, proxyURI string
         }
     }
     m.clients[deviceID] = client
+    m.apiKeys[key] = deviceID
+    m.clientIDs[client] = deviceID
 
     // Wrap event handler to catch PAIRING success and save JID
     client.AddEventHandler(func(evt interface{}) {
+        m.mu.RLock()
+        currentID := m.clientIDs[client]
+        m.mu.RUnlock()
+
         if v, ok := evt.(*events.PairSuccess); ok {
-            m.instanceStore.UpdateInstanceJID(deviceID, v.ID.String())
-            waLog.Stdout("Manager", "INFO", true).Infof("Device %s successfully paired with JID %s", deviceID, v.ID.String())
+            m.instanceStore.UpdateInstanceJID(currentID, v.ID.String())
+            waLog.Stdout("Manager", "INFO", true).Infof("Device %s successfully paired with JID %s", currentID, v.ID.String())
         }
-        m.handleEvent(deviceID, evt)
+        m.handleEvent(currentID, evt)
     })
     
-    return deviceID, client, nil
+    return deviceID, key, client, nil
 }
 
 func (m *MultiClientManager) GetClient(deviceID string) *whatsmeow.Client {
     m.mu.RLock()
     defer m.mu.RUnlock()
-    // Note: This logic assumes deviceID is the JID string from sqlstore
-    // Real implementation needs a mapping if deviceID is custom
-    return m.clients[deviceID]
+
+    if client, exists := m.clients[deviceID]; exists {
+        return client
+    }
+
+    if id, exists := m.apiKeys[deviceID]; exists {
+        if client, exists := m.clients[id]; exists {
+            return client
+        }
+    }
+
+    return nil
 }
 
 func (m *MultiClientManager) Connect(ctx context.Context, deviceID string) error {
@@ -309,12 +344,49 @@ func (m *MultiClientManager) DeleteInstance(id string) error {
         }
         client.Logout(context.Background())
         delete(m.clients, id)
+        delete(m.clientIDs, client)
+    }
+
+    for key, val := range m.apiKeys {
+        if val == id {
+            delete(m.apiKeys, key)
+            break
+        }
     }
 
     err := m.instanceStore.DeleteInstance(id)
     if err != nil {
          return fmt.Errorf("failed to delete instance from db: %w", err)
     }
+    return nil
+}
+
+// UpdateCredentials updates both Device ID and API Key in DB and in-memory maps
+func (m *MultiClientManager) UpdateCredentials(oldID, newID, newAPIKey string) error {
+    m.mu.Lock()
+    defer m.mu.Unlock()
+
+    // 1. Update database
+    err := m.instanceStore.UpdateCredentials(oldID, newID, newAPIKey)
+    if err != nil {
+        return err
+    }
+
+    // 2. Update memory mapping
+    for key, val := range m.apiKeys {
+        if val == oldID {
+            delete(m.apiKeys, key)
+            break
+        }
+    }
+    m.apiKeys[newAPIKey] = newID
+
+    if client, exists := m.clients[oldID]; exists {
+        delete(m.clients, oldID)
+        m.clients[newID] = client
+        m.clientIDs[client] = newID
+    }
+
     return nil
 }
 

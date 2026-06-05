@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { X, Save } from 'lucide-react'
-import { renameInstance, updateWebhook, updateProxy } from '@/lib/api'
+import { X, Save, Eye, EyeOff } from 'lucide-react'
+import { renameInstance, updateWebhook, updateProxy, updateCredentials } from '@/lib/api'
 import type { Instance } from '@/types'
 import { toast } from 'sonner'
 
@@ -15,6 +15,9 @@ export function EditInstanceDialog({ instance, isOpen, onClose, onSaved }: EditI
     const [name, setName] = useState('')
     const [webhookUrl, setWebhookUrl] = useState('')
     const [proxyUri, setProxyUri] = useState('')
+    const [id, setId] = useState('')
+    const [apiKey, setApiKey] = useState('')
+    const [showApiKey, setShowApiKey] = useState(false)
     const [isSaving, setIsSaving] = useState(false)
 
     useEffect(() => {
@@ -22,6 +25,9 @@ export function EditInstanceDialog({ instance, isOpen, onClose, onSaved }: EditI
             setName(instance.name)
             setWebhookUrl(instance.webhook_url || '')
             setProxyUri(instance.proxy_uri || '')
+            setId(instance.id)
+            setApiKey(instance.api_key || '')
+            setShowApiKey(false)
         }
     }, [instance, isOpen])
 
@@ -32,23 +38,39 @@ export function EditInstanceDialog({ instance, isOpen, onClose, onSaved }: EditI
             toast.error('Instance name is required')
             return
         }
+        if (!id.trim()) {
+            toast.error('Device ID is required')
+            return
+        }
+        if (!apiKey.trim()) {
+            toast.error('API Key is required')
+            return
+        }
 
         setIsSaving(true)
         let hasChanges = false
 
         try {
+            let currentId = instance.id
+
+            if (id.trim() !== instance.id || apiKey.trim() !== (instance.api_key || '')) {
+                const res = await updateCredentials(instance.id, id.trim(), apiKey.trim())
+                currentId = res.device_id
+                hasChanges = true
+            }
+
             if (name !== instance.name) {
-                await renameInstance(instance.id, name)
+                await renameInstance(currentId, name)
                 hasChanges = true
             }
 
             if (webhookUrl !== (instance.webhook_url || '')) {
-                await updateWebhook(instance.id, webhookUrl)
+                await updateWebhook(currentId, webhookUrl)
                 hasChanges = true
             }
 
             if (proxyUri !== (instance.proxy_uri || '')) {
-                await updateProxy(instance.id, proxyUri)
+                await updateProxy(currentId, proxyUri)
                 hasChanges = true
             }
 
@@ -91,6 +113,33 @@ export function EditInstanceDialog({ instance, isOpen, onClose, onSaved }: EditI
                             onChange={e => setName(e.target.value)}
                             className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
                         />
+                    </div>
+                    <div>
+                        <label className="text-sm font-medium text-foreground mb-1.5 block">Device ID *</label>
+                        <input
+                            type="text"
+                            value={id}
+                            onChange={e => setId(e.target.value)}
+                            className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring font-mono"
+                        />
+                    </div>
+                    <div>
+                        <label className="text-sm font-medium text-foreground mb-1.5 block">API Key *</label>
+                        <div className="relative">
+                            <input
+                                type={showApiKey ? 'text' : 'password'}
+                                value={apiKey}
+                                onChange={e => setApiKey(e.target.value)}
+                                className="w-full pl-3 pr-10 py-2 bg-background border border-border rounded-md text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring font-mono"
+                            />
+                            <button
+                                type="button"
+                                onClick={() => setShowApiKey(!showApiKey)}
+                                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                            >
+                                {showApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
+                            </button>
+                        </div>
                     </div>
                     <div>
                         <label className="text-sm font-medium text-foreground mb-1.5 block">Webhook URL</label>

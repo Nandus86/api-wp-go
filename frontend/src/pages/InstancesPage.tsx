@@ -19,6 +19,8 @@ export function InstancesPage() {
     const [newName, setNewName] = useState('')
     const [newWebhook, setNewWebhook] = useState('')
     const [newProxy, setNewProxy] = useState('')
+    const [newId, setNewId] = useState('')
+    const [newApiKey, setNewApiKey] = useState('')
 
     // QR Code Dialog State
     const [qrDialogOpen, setQrDialogOpen] = useState(false)
@@ -62,10 +64,12 @@ export function InstancesPage() {
     const handleCreate = async () => {
         if (!newName.trim()) return
         try {
-            const created = await createInstance(newName, newWebhook, newProxy)
+            const created = await createInstance(newName, newWebhook, newProxy, newId.trim() || undefined, newApiKey.trim() || undefined)
             setNewName('')
             setNewWebhook('')
             setNewProxy('')
+            setNewId('')
+            setNewApiKey('')
             setShowCreate(false)
 
             // Auto open QR dialog for new instances
@@ -73,7 +77,16 @@ export function InstancesPage() {
             setQrDialogName(created.name)
             setQrDialogOpen(true)
 
-            toast.success('Instance created successfully')
+            if (created.api_key) {
+                try {
+                    await navigator.clipboard.writeText(created.api_key)
+                    toast.success(`Instance created! API Key copied to clipboard: ${created.api_key}`, { duration: 10000 })
+                } catch {
+                    toast.success(`Instance created! API Key: ${created.api_key}`, { duration: 15000 })
+                }
+            } else {
+                toast.success('Instance created successfully')
+            }
             loadInstances()
         } catch (e) {
             toast.error('Failed to create instance')
@@ -225,6 +238,26 @@ export function InstancesPage() {
                                     value={newProxy}
                                     onChange={e => setNewProxy(e.target.value)}
                                     placeholder="socks5://user:pass@host:port"
+                                    className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                                />
+                            </div>
+                            <div>
+                                <label className="text-sm text-muted-foreground mb-1 block">Custom Device ID (Optional)</label>
+                                <input
+                                    type="text"
+                                    value={newId}
+                                    onChange={e => setNewId(e.target.value)}
+                                    placeholder="e.g. 68ff5a3c4177621d0b00faa8 (24 hex characters)"
+                                    className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                                />
+                            </div>
+                            <div>
+                                <label className="text-sm text-muted-foreground mb-1 block">Custom API Key (Optional)</label>
+                                <input
+                                    type="text"
+                                    value={newApiKey}
+                                    onChange={e => setNewApiKey(e.target.value)}
+                                    placeholder="e.g. a590b422-e591-4273-a6a3-bd75793042ec"
                                     className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
                                 />
                             </div>

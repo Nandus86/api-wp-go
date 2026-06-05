@@ -57,7 +57,7 @@ func (h *Handler) InitInstance(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// For compatibility mapping token to our instance ID
-	createdInstanceID, _, err := h.manager.NewClientWithName(req.Name, "", "")
+	createdInstanceID, _, _, err := h.manager.NewClientWithName("", "", req.Name, "", "")
 	if err != nil {
 		http.Error(w, "Failed to create instance", http.StatusInternalServerError)
 		return

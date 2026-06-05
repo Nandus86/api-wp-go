@@ -6,4 +6,5 @@ export interface Instance {
     proxy_uri: string
     phone?: string
     jid?: string
+    api_key?: string
 }

@@ -12,6 +12,7 @@ type Instance struct {
     Status     string `json:"status"`
     WebhookURL string `json:"webhook_url"`
     ProxyURI   string `json:"proxy_uri"`
+    APIKey     string `json:"api_key"`
 }
 
 type InstanceStore struct {
@@ -45,6 +46,11 @@ func NewInstanceStore(dbDialect, dbAddress string) (*InstanceStore, error) {
         // ignore error
     }
 
+    _, err = db.Exec(`ALTER TABLE instances ADD COLUMN IF NOT EXISTS api_key VARCHAR`)
+    if err != nil {
+        // ignore error
+    }
+
     _, err = db.Exec(`CREATE TABLE IF NOT EXISTS message_stats (
         id SERIAL PRIMARY KEY,
         instance_id VARCHAR NOT NULL,
@@ -59,8 +65,8 @@ func NewInstanceStore(dbDialect, dbAddress string) (*InstanceStore, error) {
     return &InstanceStore{db: db}, nil
 }
 
-func (s *InstanceStore) CreateInstance(id, name, webhookURL, proxyURI string) error {
-    _, err := s.db.Exec(`INSERT INTO instances (id, name, jid, webhook_url, proxy_uri) VALUES ($1, $2, '', $3, $4)`, id, name, webhookURL, proxyURI)
+func (s *InstanceStore) CreateInstance(id, apiKey, name, webhookURL, proxyURI string) error {
+    _, err := s.db.Exec(`INSERT INTO instances (id, name, jid, webhook_url, proxy_uri, api_key) VALUES ($1, $2, '', $3, $4, $5)`, id, name, webhookURL, proxyURI, apiKey)
     return err
 }
 
@@ -85,9 +91,19 @@ func (s *InstanceStore) RenameInstance(id, name string) error {
 }
 
 func (s *InstanceStore) GetInstanceByID(id string) (*Instance, error) {
-    row := s.db.QueryRow(`SELECT id, name, jid, COALESCE(webhook_url, ''), COALESCE(proxy_uri, '') FROM instances WHERE id = $1`, id)
+    row := s.db.QueryRow(`SELECT id, name, jid, COALESCE(webhook_url, ''), COALESCE(proxy_uri, ''), COALESCE(api_key, '') FROM instances WHERE id = $1`, id)
     var i Instance
-    err := row.Scan(&i.ID, &i.Name, &i.JID, &i.WebhookURL, &i.ProxyURI)
+    err := row.Scan(&i.ID, &i.Name, &i.JID, &i.WebhookURL, &i.ProxyURI, &i.APIKey)
+    if err != nil {
+        return nil, err
+    }
+    return &i, nil
+}
+
+func (s *InstanceStore) GetInstanceByIDOrAPIKey(idOrApiKey string) (*Instance, error) {
+    row := s.db.QueryRow(`SELECT id, name, jid, COALESCE(webhook_url, ''), COALESCE(proxy_uri, ''), COALESCE(api_key, '') FROM instances WHERE id = $1 OR api_key = $1`, idOrApiKey)
+    var i Instance
+    err := row.Scan(&i.ID, &i.Name, &i.JID, &i.WebhookURL, &i.ProxyURI, &i.APIKey)
     if err != nil {
         return nil, err
     }
@@ -95,7 +111,7 @@ func (s *InstanceStore) GetInstanceByID(id string) (*Instance, error) {
 }
 
 func (s *InstanceStore) GetAllInstances() ([]Instance, error) {
-    rows, err := s.db.Query(`SELECT id, name, jid, COALESCE(webhook_url, ''), COALESCE(proxy_uri, '') FROM instances`)
+    rows, err := s.db.Query(`SELECT id, name, jid, COALESCE(webhook_url, ''), COALESCE(proxy_uri, ''), COALESCE(api_key, '') FROM instances`)
     if err != nil {
         return nil, err
     }
@@ -104,12 +120,36 @@ func (s *InstanceStore) GetAllInstances() ([]Instance, error) {
     var instances []Instance
     for rows.Next() {
         var i Instance
-        if err := rows.Scan(&i.ID, &i.Name, &i.JID, &i.WebhookURL, &i.ProxyURI); err != nil {
+        if err := rows.Scan(&i.ID, &i.Name, &i.JID, &i.WebhookURL, &i.ProxyURI, &i.APIKey); err != nil {
             return nil, err
         }
         instances = append(instances, i)
     }
     return instances, nil
+}
+
+func (s *InstanceStore) UpdateCredentials(oldID, newID, newAPIKey string) error {
+    tx, err := s.db.Begin()
+    if err != nil {
+        return err
+    }
+    defer tx.Rollback()
+
+    // 1. Update message_stats reference if we changed the ID
+    if oldID != newID {
+        _, err = tx.Exec(`UPDATE message_stats SET instance_id = $1 WHERE instance_id = $2`, newID, oldID)
+        if err != nil {
+            return err
+        }
+    }
+
+    // 2. Update the instance table
+    _, err = tx.Exec(`UPDATE instances SET id = $1, api_key = $2 WHERE id = $3`, newID, newAPIKey, oldID)
+    if err != nil {
+        return err
+    }
+
+    return tx.Commit()
 }
 
 func (s *InstanceStore) DeleteInstance(id string) error {
