@@ -97,9 +97,11 @@ func NewMultiClientManager(dbDialect, dbAddress string, dispatcher *EventDispatc
 
 func (m *MultiClientManager) handleEvent(deviceID string, evt interface{}) {
 	webhookUrl := ""
+	apiKey := ""
 	inst, err := m.instanceStore.GetInstanceByID(deviceID)
 	if err == nil && inst != nil {
 		webhookUrl = inst.WebhookURL
+		apiKey = inst.APIKey
 	}
 
 	switch v := evt.(type) {
@@ -118,11 +120,17 @@ func (m *MultiClientManager) handleEvent(deviceID string, evt interface{}) {
 
 		// Webhook forwarding
 		if m.rmqClient != nil {
-			msgType, content := parseMessageContent(v.Message)
+			msgType, content, contextInfo, reaction, poll := parseMessageContent(v.Message)
+
+			var verifiedName string
+			if v.Info.VerifiedName != nil && v.Info.VerifiedName.Details != nil {
+				verifiedName = v.Info.VerifiedName.Details.GetVerifiedName()
+			}
 
 			payload := map[string]interface{}{
 				"event":       "messages.upsert",
 				"instance_id": deviceID,
+				"api_key":     apiKey,
 				"webhook_url": webhookUrl,
 				"data": map[string]interface{}{
 					"key": map[string]interface{}{
@@ -131,15 +139,28 @@ func (m *MultiClientManager) handleEvent(deviceID string, evt interface{}) {
 						"fromMe":      v.Info.IsFromMe,
 						"participant": v.Info.Sender.String(),
 					},
-					"pushName":    v.Info.PushName,
-					"timestamp":   v.Info.Timestamp.Unix(),
-					"messageType": msgType,
-					"message":     content,
+					"pushName":     v.Info.PushName,
+					"timestamp":    v.Info.Timestamp.Unix(),
+					"messageType":  msgType,
+					"message":      content,
 					"status": map[string]interface{}{
 						"isEphemeral": v.IsEphemeral,
 						"isViewOnce":  v.IsViewOnce || v.IsViewOnceV2,
 						"isEdit":      v.IsEdit,
 					},
+					"isGroup":      v.Info.IsGroup,
+					"device":       int(v.Info.Sender.Device),
+					"senderPhone":  v.Info.Sender.User,
+					"chatPhone":    v.Info.Chat.User,
+					"senderBare":   v.Info.Sender.ToBare().String(),
+					"chatBare":     v.Info.Chat.ToBare().String(),
+					"verifiedName": verifiedName,
+					"multicast":    v.Info.Multicast,
+					"mediaType":    v.Info.MediaType,
+					"contextInfo":  contextInfo,
+					"reaction":     reaction,
+					"poll":         poll,
+					"raw":          v.Message,
 				},
 			}
 
@@ -159,6 +180,7 @@ func (m *MultiClientManager) handleEvent(deviceID string, evt interface{}) {
 			payload := map[string]interface{}{
 				"event":       "receipts.update",
 				"instance_id": deviceID,
+				"api_key":     apiKey,
 				"webhook_url": webhookUrl,
 				"data": map[string]interface{}{
 					"chatId":     v.Chat.String(),
@@ -180,6 +202,7 @@ func (m *MultiClientManager) handleEvent(deviceID string, evt interface{}) {
 			payload := map[string]interface{}{
 				"event":       "presence.update",
 				"instance_id": deviceID,
+				"api_key":     apiKey,
 				"webhook_url": webhookUrl,
 				"data": map[string]interface{}{
 					"chatId": v.Chat.String(),
@@ -200,6 +223,7 @@ func (m *MultiClientManager) handleEvent(deviceID string, evt interface{}) {
 			payload := map[string]interface{}{
 				"event":       "presence.update",
 				"instance_id": deviceID,
+				"api_key":     apiKey,
 				"webhook_url": webhookUrl,
 				"data": map[string]interface{}{
 					"sender":      v.From.String(),
@@ -231,6 +255,7 @@ func (m *MultiClientManager) handleEvent(deviceID string, evt interface{}) {
 			payload := map[string]interface{}{
 				"event":       "groups.update",
 				"instance_id": deviceID,
+				"api_key":     apiKey,
 				"webhook_url": webhookUrl,
 				"data":        data,
 			}
@@ -246,6 +271,7 @@ func (m *MultiClientManager) handleEvent(deviceID string, evt interface{}) {
 			payload := map[string]interface{}{
 				"event":       "calls.offer",
 				"instance_id": deviceID,
+				"api_key":     apiKey,
 				"webhook_url": webhookUrl,
 				"data": map[string]interface{}{
 					"callId":    v.CallID,
@@ -557,31 +583,55 @@ func (m *MultiClientManager) ListInstances() []Instance {
     return dbInstances
 }
 
-func parseMessageContent(msg *waE2E.Message) (string, map[string]interface{}) {
+func extractContextInfo(ctx *waE2E.ContextInfo) map[string]interface{} {
+	if ctx == nil {
+		return nil
+	}
+	res := make(map[string]interface{})
+	if ctx.StanzaID != nil {
+		res["quotedMessageId"] = ctx.GetStanzaID()
+	}
+	if ctx.Participant != nil {
+		res["quotedParticipant"] = ctx.GetParticipant()
+	}
+	if ctx.QuotedMessage != nil {
+		if ctx.QuotedMessage.Conversation != nil {
+			res["quotedMessage"] = ctx.QuotedMessage.GetConversation()
+		} else if ctx.QuotedMessage.ExtendedTextMessage != nil {
+			res["quotedMessage"] = ctx.QuotedMessage.GetExtendedTextMessage().GetText()
+		}
+	}
+	if len(ctx.MentionedJID) > 0 {
+		res["mentionedJids"] = ctx.MentionedJID
+	}
+	return res
+}
+
+func parseMessageContent(msg *waE2E.Message) (
+	msgType string,
+	content map[string]interface{},
+	contextInfo map[string]interface{},
+	reaction map[string]interface{},
+	poll map[string]interface{},
+) {
 	if msg == nil {
-		return "empty", nil
+		return "empty", nil, nil, nil, nil
 	}
 
-	content := make(map[string]interface{})
+	content = make(map[string]interface{})
 
 	if msg.Conversation != nil {
 		content["conversation"] = msg.GetConversation()
-		return "conversation", content
+		return "conversation", content, nil, nil, nil
 	}
 
 	if msg.ExtendedTextMessage != nil {
 		ext := msg.GetExtendedTextMessage()
 		content["text"] = ext.GetText()
 		if ext.ContextInfo != nil {
-			ctxInfo := make(map[string]interface{})
-			ctxInfo["stanzaId"] = ext.ContextInfo.GetStanzaID()
-			ctxInfo["participant"] = ext.ContextInfo.GetParticipant()
-			if ext.ContextInfo.QuotedMessage != nil {
-				ctxInfo["quotedMessage"] = ext.ContextInfo.QuotedMessage.GetConversation()
-			}
-			content["contextInfo"] = ctxInfo
+			contextInfo = extractContextInfo(ext.ContextInfo)
 		}
-		return "extendedTextMessage", content
+		return "extendedTextMessage", content, contextInfo, nil, nil
 	}
 
 	if msg.ImageMessage != nil {
@@ -590,7 +640,10 @@ func parseMessageContent(msg *waE2E.Message) (string, map[string]interface{}) {
 		content["mimetype"] = img.GetMimetype()
 		content["fileLength"] = img.GetFileLength()
 		content["url"] = img.GetURL()
-		return "imageMessage", content
+		if img.ContextInfo != nil {
+			contextInfo = extractContextInfo(img.ContextInfo)
+		}
+		return "imageMessage", content, contextInfo, nil, nil
 	}
 
 	if msg.VideoMessage != nil {
@@ -600,7 +653,10 @@ func parseMessageContent(msg *waE2E.Message) (string, map[string]interface{}) {
 		content["fileLength"] = vid.GetFileLength()
 		content["url"] = vid.GetURL()
 		content["gifPlayback"] = vid.GetGifPlayback()
-		return "videoMessage", content
+		if vid.ContextInfo != nil {
+			contextInfo = extractContextInfo(vid.ContextInfo)
+		}
+		return "videoMessage", content, contextInfo, nil, nil
 	}
 
 	if msg.AudioMessage != nil {
@@ -609,7 +665,10 @@ func parseMessageContent(msg *waE2E.Message) (string, map[string]interface{}) {
 		content["fileLength"] = aud.GetFileLength()
 		content["url"] = aud.GetURL()
 		content["ptt"] = aud.GetPTT()
-		return "audioMessage", content
+		if aud.ContextInfo != nil {
+			contextInfo = extractContextInfo(aud.ContextInfo)
+		}
+		return "audioMessage", content, contextInfo, nil, nil
 	}
 
 	if msg.DocumentMessage != nil {
@@ -619,7 +678,10 @@ func parseMessageContent(msg *waE2E.Message) (string, map[string]interface{}) {
 		content["mimetype"] = doc.GetMimetype()
 		content["fileLength"] = doc.GetFileLength()
 		content["url"] = doc.GetURL()
-		return "documentMessage", content
+		if doc.ContextInfo != nil {
+			contextInfo = extractContextInfo(doc.ContextInfo)
+		}
+		return "documentMessage", content, contextInfo, nil, nil
 	}
 
 	if msg.StickerMessage != nil {
@@ -627,7 +689,10 @@ func parseMessageContent(msg *waE2E.Message) (string, map[string]interface{}) {
 		content["mimetype"] = stk.GetMimetype()
 		content["fileLength"] = stk.GetFileLength()
 		content["url"] = stk.GetURL()
-		return "stickerMessage", content
+		if stk.ContextInfo != nil {
+			contextInfo = extractContextInfo(stk.ContextInfo)
+		}
+		return "stickerMessage", content, contextInfo, nil, nil
 	}
 
 	if msg.LocationMessage != nil {
@@ -636,53 +701,64 @@ func parseMessageContent(msg *waE2E.Message) (string, map[string]interface{}) {
 		content["longitude"] = loc.GetDegreesLongitude()
 		content["name"] = loc.GetName()
 		content["address"] = loc.GetAddress()
-		return "locationMessage", content
+		if loc.ContextInfo != nil {
+			contextInfo = extractContextInfo(loc.ContextInfo)
+		}
+		return "locationMessage", content, contextInfo, nil, nil
 	}
 
 	if msg.ContactMessage != nil {
 		cnt := msg.GetContactMessage()
 		content["displayName"] = cnt.GetDisplayName()
 		content["vcard"] = cnt.GetVcard()
-		return "contactMessage", content
+		if cnt.ContextInfo != nil {
+			contextInfo = extractContextInfo(cnt.ContextInfo)
+		}
+		return "contactMessage", content, contextInfo, nil, nil
 	}
 
 	if msg.ReactionMessage != nil {
 		react := msg.GetReactionMessage()
-		content["text"] = react.GetText()
+		reaction = make(map[string]interface{})
+		reaction["text"] = react.GetText()
 		if react.Key != nil {
-			reactKey := make(map[string]interface{})
-			reactKey["id"] = react.Key.GetID()
-			reactKey["remoteJid"] = react.Key.GetRemoteJID()
-			reactKey["fromMe"] = react.Key.GetFromMe()
-			content["key"] = reactKey
+			reaction["targetMessageId"] = react.Key.GetID()
 		}
-		return "reactionMessage", content
+		return "reactionMessage", nil, nil, reaction, nil
 	}
 
 	if msg.PollCreationMessage != nil {
-		poll := msg.GetPollCreationMessage()
-		content["name"] = poll.GetName()
+		pollObj := msg.GetPollCreationMessage()
+		poll = make(map[string]interface{})
+		poll["question"] = pollObj.GetName()
 		var options []string
-		for _, opt := range poll.GetOptions() {
+		for _, opt := range pollObj.GetOptions() {
 			options = append(options, opt.GetOptionName())
 		}
-		content["options"] = options
-		return "pollCreationMessage", content
+		poll["options"] = options
+		if pollObj.ContextInfo != nil {
+			contextInfo = extractContextInfo(pollObj.ContextInfo)
+		}
+		return "pollCreationMessage", nil, contextInfo, nil, poll
 	}
 
 	if msg.PollUpdateMessage != nil {
 		vote := msg.GetPollUpdateMessage()
+		poll = make(map[string]interface{})
 		if vote.PollCreationMessageKey != nil {
-			content["pollMessageId"] = vote.PollCreationMessageKey.GetID()
+			poll["targetPollId"] = vote.PollCreationMessageKey.GetID()
 		}
-		return "pollUpdateMessage", content
+		return "pollUpdateMessage", nil, nil, nil, poll
 	}
 
 	if msg.ButtonsMessage != nil {
 		btn := msg.GetButtonsMessage()
 		content["contentText"] = btn.GetContentText()
 		content["footerText"] = btn.GetFooterText()
-		return "buttonsMessage", content
+		if btn.ContextInfo != nil {
+			contextInfo = extractContextInfo(btn.ContextInfo)
+		}
+		return "buttonsMessage", content, contextInfo, nil, nil
 	}
 
 	if msg.ListMessage != nil {
@@ -690,8 +766,11 @@ func parseMessageContent(msg *waE2E.Message) (string, map[string]interface{}) {
 		content["title"] = lst.GetTitle()
 		content["description"] = lst.GetDescription()
 		content["buttonText"] = lst.GetButtonText()
-		return "listMessage", content
+		if lst.ContextInfo != nil {
+			contextInfo = extractContextInfo(lst.ContextInfo)
+		}
+		return "listMessage", content, contextInfo, nil, nil
 	}
 
-	return "unknown", nil
+	return "unknown", nil, nil, nil, nil
 }
