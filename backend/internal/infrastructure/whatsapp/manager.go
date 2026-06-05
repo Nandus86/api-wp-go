@@ -6,9 +6,11 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sync"
+	"time"
 
 	//"github.com/user/whatsmeow-basileia/pkg/logger"
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
@@ -94,59 +96,171 @@ func NewMultiClientManager(dbDialect, dbAddress string, dispatcher *EventDispatc
 }
 
 func (m *MultiClientManager) handleEvent(deviceID string, evt interface{}) {
+	webhookUrl := ""
+	inst, err := m.instanceStore.GetInstanceByID(deviceID)
+	if err == nil && inst != nil {
+		webhookUrl = inst.WebhookURL
+	}
+
 	switch v := evt.(type) {
 	case *events.Message:
-        // Record incoming message stat
-        if !v.Info.IsFromMe {
-            m.instanceStore.IncrementMessageStat(deviceID, "in")
-        } else {
-            m.instanceStore.IncrementMessageStat(deviceID, "out")
-        }
+		// Record incoming message stat
+		if !v.Info.IsFromMe {
+			m.instanceStore.IncrementMessageStat(deviceID, "in")
+		} else {
+			m.instanceStore.IncrementMessageStat(deviceID, "out")
+		}
 
 		// Sniff incoming messages to capture the exact payload Uazapi uses
 		if v.Message != nil && (v.Message.GetInteractiveMessage() != nil || v.Message.GetViewOnceMessage() != nil || v.Message.GetViewOnceMessageV2() != nil || v.Message.GetViewOnceMessageV2Extension() != nil || v.Message.GetTemplateMessage() != nil || v.Message.GetButtonsMessage() != nil || v.Message.GetListMessage() != nil) {
 			waLog.Stdout("Sniffer", "INFO", true).Infof("\n\n====== INTERACTIVE MESSAGE SNIFFED ======\nJID: %s\nDeviceID: %d\nProtobuf:\n%+v\n==========================================\n\n", v.Info.Sender.String(), v.Info.Sender.Device, v.Message)
 		}
 
-        // Webhook forwarding
-        if m.rmqClient != nil {
-            inst, err := m.instanceStore.GetInstanceByID(deviceID)
-            webhookUrl := ""
-            if err == nil && inst != nil {
-                webhookUrl = inst.WebhookURL
-            }
+		// Webhook forwarding
+		if m.rmqClient != nil {
+			msgType, content := parseMessageContent(v.Message)
 
-            payload := map[string]interface{}{
-                "event": "messages.upsert",
-                "instance_id": deviceID,
-                "webhook_url": webhookUrl,
-                "data": map[string]interface{}{
-                    "message": map[string]interface{}{
-                        "conversation": v.Message.GetConversation(),
-                    },
-                    "key": map[string]interface{}{
-                        "remoteJid": v.Info.Chat.String(),
-                        "fromMe": v.Info.IsFromMe,
-                        "id": v.Info.ID,
-                    },
-                    "pushName": v.Info.PushName,
-                    "timestamp": v.Info.Timestamp.Unix(),
-                },
-            }
+			payload := map[string]interface{}{
+				"event":       "messages.upsert",
+				"instance_id": deviceID,
+				"webhook_url": webhookUrl,
+				"data": map[string]interface{}{
+					"key": map[string]interface{}{
+						"id":          v.Info.ID,
+						"remoteJid":   v.Info.Chat.String(),
+						"fromMe":      v.Info.IsFromMe,
+						"participant": v.Info.Sender.String(),
+					},
+					"pushName":    v.Info.PushName,
+					"timestamp":   v.Info.Timestamp.Unix(),
+					"messageType": msgType,
+					"message":     content,
+					"status": map[string]interface{}{
+						"isEphemeral": v.IsEphemeral,
+						"isViewOnce":  v.IsViewOnce || v.IsViewOnceV2,
+						"isEdit":      v.IsEdit,
+					},
+				},
+			}
 
-            if v.Message.GetExtendedTextMessage() != nil {
-                 payload["data"].(map[string]interface{})["message"].(map[string]interface{})["conversation"] = v.Message.GetExtendedTextMessage().GetText()
-            }
+			body, err := json.Marshal(payload)
+			if err == nil {
+				m.rmqClient.Publish(context.Background(), "webhook_events_queue", body)
+			}
+		}
 
-            body, err := json.Marshal(payload)
-            if err == nil {
-                m.rmqClient.Publish(context.Background(), "webhook_events_queue", body)
-            }
-        }
 	case *events.Receipt:
-        // Also trace delivered/sent if needed, but usually we just track messages sent directly in the worker or when events.Message fromMe=true arrives.
+		if m.rmqClient != nil {
+			var msgIDs []string
+			for _, id := range v.MessageIDs {
+				msgIDs = append(msgIDs, string(id))
+			}
+
+			payload := map[string]interface{}{
+				"event":       "receipts.update",
+				"instance_id": deviceID,
+				"webhook_url": webhookUrl,
+				"data": map[string]interface{}{
+					"chatId":     v.Chat.String(),
+					"sender":     v.Sender.String(),
+					"messageIds": msgIDs,
+					"type":       string(v.Type),
+					"timestamp":  v.Timestamp.Unix(),
+				},
+			}
+
+			body, err := json.Marshal(payload)
+			if err == nil {
+				m.rmqClient.Publish(context.Background(), "webhook_events_queue", body)
+			}
+		}
+
+	case *events.ChatPresence:
+		if m.rmqClient != nil {
+			payload := map[string]interface{}{
+				"event":       "presence.update",
+				"instance_id": deviceID,
+				"webhook_url": webhookUrl,
+				"data": map[string]interface{}{
+					"chatId": v.Chat.String(),
+					"sender": v.Sender.String(),
+					"state":  string(v.State),
+					"media":  string(v.Media),
+				},
+			}
+
+			body, err := json.Marshal(payload)
+			if err == nil {
+				m.rmqClient.Publish(context.Background(), "webhook_events_queue", body)
+			}
+		}
+
+	case *events.Presence:
+		if m.rmqClient != nil {
+			payload := map[string]interface{}{
+				"event":       "presence.update",
+				"instance_id": deviceID,
+				"webhook_url": webhookUrl,
+				"data": map[string]interface{}{
+					"sender":      v.From.String(),
+					"unavailable": v.Unavailable,
+					"lastSeen":    v.LastSeen.Format(time.RFC3339),
+				},
+			}
+
+			body, err := json.Marshal(payload)
+			if err == nil {
+				m.rmqClient.Publish(context.Background(), "webhook_events_queue", body)
+			}
+		}
+
+	case *events.GroupInfo:
+		if m.rmqClient != nil {
+			data := map[string]interface{}{
+				"groupId":   v.JID.String(),
+				"sender":    v.Sender.String(),
+				"timestamp": v.Timestamp.Unix(),
+			}
+			if v.Name != nil {
+				data["name"] = v.Name.Name
+			}
+			if v.Topic != nil {
+				data["topic"] = v.Topic.Topic
+			}
+
+			payload := map[string]interface{}{
+				"event":       "groups.update",
+				"instance_id": deviceID,
+				"webhook_url": webhookUrl,
+				"data":        data,
+			}
+
+			body, err := json.Marshal(payload)
+			if err == nil {
+				m.rmqClient.Publish(context.Background(), "webhook_events_queue", body)
+			}
+		}
+
+	case *events.CallOffer:
+		if m.rmqClient != nil {
+			payload := map[string]interface{}{
+				"event":       "calls.offer",
+				"instance_id": deviceID,
+				"webhook_url": webhookUrl,
+				"data": map[string]interface{}{
+					"callId":    v.CallID,
+					"sender":    v.Sender.String(),
+					"timestamp": v.Timestamp.Unix(),
+				},
+			}
+
+			body, err := json.Marshal(payload)
+			if err == nil {
+				m.rmqClient.Publish(context.Background(), "webhook_events_queue", body)
+			}
+		}
 	}
-    m.dispatcher.Dispatch(evt)
+	m.dispatcher.Dispatch(evt)
 }
 
 
@@ -441,4 +555,143 @@ func (m *MultiClientManager) ListInstances() []Instance {
     }
     
     return dbInstances
+}
+
+func parseMessageContent(msg *waE2E.Message) (string, map[string]interface{}) {
+	if msg == nil {
+		return "empty", nil
+	}
+
+	content := make(map[string]interface{})
+
+	if msg.Conversation != nil {
+		content["conversation"] = msg.GetConversation()
+		return "conversation", content
+	}
+
+	if msg.ExtendedTextMessage != nil {
+		ext := msg.GetExtendedTextMessage()
+		content["text"] = ext.GetText()
+		if ext.ContextInfo != nil {
+			ctxInfo := make(map[string]interface{})
+			ctxInfo["stanzaId"] = ext.ContextInfo.GetStanzaId()
+			ctxInfo["participant"] = ext.ContextInfo.GetParticipant()
+			if ext.ContextInfo.QuotedMessage != nil {
+				ctxInfo["quotedMessage"] = ext.ContextInfo.QuotedMessage.GetConversation()
+			}
+			content["contextInfo"] = ctxInfo
+		}
+		return "extendedTextMessage", content
+	}
+
+	if msg.ImageMessage != nil {
+		img := msg.GetImageMessage()
+		content["caption"] = img.GetCaption()
+		content["mimetype"] = img.GetMimetype()
+		content["fileLength"] = img.GetFileLength()
+		content["url"] = img.GetURL()
+		return "imageMessage", content
+	}
+
+	if msg.VideoMessage != nil {
+		vid := msg.GetVideoMessage()
+		content["caption"] = vid.GetCaption()
+		content["mimetype"] = vid.GetMimetype()
+		content["fileLength"] = vid.GetFileLength()
+		content["url"] = vid.GetURL()
+		content["gifPlayback"] = vid.GetGifPlayback()
+		return "videoMessage", content
+	}
+
+	if msg.AudioMessage != nil {
+		aud := msg.GetAudioMessage()
+		content["mimetype"] = aud.GetMimetype()
+		content["fileLength"] = aud.GetFileLength()
+		content["url"] = aud.GetURL()
+		content["ptt"] = aud.GetPtt()
+		return "audioMessage", content
+	}
+
+	if msg.DocumentMessage != nil {
+		doc := msg.GetDocumentMessage()
+		content["title"] = doc.GetTitle()
+		content["fileName"] = doc.GetFileName()
+		content["mimetype"] = doc.GetMimetype()
+		content["fileLength"] = doc.GetFileLength()
+		content["url"] = doc.GetURL()
+		return "documentMessage", content
+	}
+
+	if msg.StickerMessage != nil {
+		stk := msg.GetStickerMessage()
+		content["mimetype"] = stk.GetMimetype()
+		content["fileLength"] = stk.GetFileLength()
+		content["url"] = stk.GetURL()
+		return "stickerMessage", content
+	}
+
+	if msg.LocationMessage != nil {
+		loc := msg.GetLocationMessage()
+		content["latitude"] = loc.GetDegreesLatitude()
+		content["longitude"] = loc.GetDegreesLongitude()
+		content["name"] = loc.GetName()
+		content["address"] = loc.GetAddress()
+		return "locationMessage", content
+	}
+
+	if msg.ContactMessage != nil {
+		cnt := msg.GetContactMessage()
+		content["displayName"] = cnt.GetDisplayName()
+		content["vcard"] = cnt.GetVcard()
+		return "contactMessage", content
+	}
+
+	if msg.ReactionMessage != nil {
+		react := msg.GetReactionMessage()
+		content["text"] = react.GetText()
+		if react.Key != nil {
+			reactKey := make(map[string]interface{})
+			reactKey["id"] = react.Key.GetId()
+			reactKey["remoteJid"] = react.Key.GetRemoteJid()
+			reactKey["fromMe"] = react.Key.GetFromMe()
+			content["key"] = reactKey
+		}
+		return "reactionMessage", content
+	}
+
+	if msg.PollCreationMessage != nil {
+		poll := msg.GetPollCreationMessage()
+		content["name"] = poll.GetName()
+		var options []string
+		for _, opt := range poll.GetOptions() {
+			options = append(options, opt.GetOptionName())
+		}
+		content["options"] = options
+		return "pollCreationMessage", content
+	}
+
+	if msg.PollUpdateMessage != nil {
+		vote := msg.GetPollUpdateMessage()
+		if vote.PollCreationMessageKey != nil {
+			content["pollMessageId"] = vote.PollCreationMessageKey.GetId()
+		}
+		return "pollUpdateMessage", content
+	}
+
+	if msg.ButtonsMessage != nil {
+		btn := msg.GetButtonsMessage()
+		content["contentText"] = btn.GetContentText()
+		content["footerText"] = btn.GetFooterText()
+		return "buttonsMessage", content
+	}
+
+	if msg.ListMessage != nil {
+		lst := msg.GetListMessage()
+		content["title"] = lst.GetTitle()
+		content["description"] = lst.GetDescription()
+		content["buttonText"] = lst.GetButtonText()
+		return "listMessage", content
+	}
+
+	return "unknown", nil
 }
