@@ -127,6 +127,9 @@ func (m *MultiClientManager) handleEvent(deviceID string, evt interface{}) {
 				verifiedName = v.Info.VerifiedName.Details.GetVerifiedName()
 			}
 
+			senderJID := m.resolveLID(deviceID, v.Info.Sender)
+			chatJID := m.resolveLID(deviceID, v.Info.Chat)
+
 			payload := map[string]interface{}{
 				"event":       "messages.upsert",
 				"instance_id": deviceID,
@@ -135,9 +138,9 @@ func (m *MultiClientManager) handleEvent(deviceID string, evt interface{}) {
 				"data": map[string]interface{}{
 					"key": map[string]interface{}{
 						"id":          v.Info.ID,
-						"remoteJid":   v.Info.Chat.String(),
+						"remoteJid":   chatJID.String(),
 						"fromMe":      v.Info.IsFromMe,
-						"participant": v.Info.Sender.String(),
+						"participant": senderJID.String(),
 					},
 					"pushName":     v.Info.PushName,
 					"timestamp":    v.Info.Timestamp.Unix(),
@@ -150,10 +153,10 @@ func (m *MultiClientManager) handleEvent(deviceID string, evt interface{}) {
 					},
 					"isGroup":      v.Info.IsGroup,
 					"device":       int(v.Info.Sender.Device),
-					"senderPhone":  v.Info.Sender.User,
-					"chatPhone":    v.Info.Chat.User,
-					"senderBare":   v.Info.Sender.ToNonAD().String(),
-					"chatBare":     v.Info.Chat.ToNonAD().String(),
+					"senderPhone":  senderJID.User,
+					"chatPhone":    chatJID.User,
+					"senderBare":   senderJID.ToNonAD().String(),
+					"chatBare":     chatJID.ToNonAD().String(),
 					"verifiedName": verifiedName,
 					"multicast":    v.Info.Multicast,
 					"mediaType":    v.Info.MediaType,
@@ -177,14 +180,17 @@ func (m *MultiClientManager) handleEvent(deviceID string, evt interface{}) {
 				msgIDs = append(msgIDs, string(id))
 			}
 
+			chatJID := m.resolveLID(deviceID, v.Chat)
+			senderJID := m.resolveLID(deviceID, v.Sender)
+
 			payload := map[string]interface{}{
 				"event":       "receipts.update",
 				"instance_id": deviceID,
 				"api_key":     apiKey,
 				"webhook_url": webhookUrl,
 				"data": map[string]interface{}{
-					"chatId":     v.Chat.String(),
-					"sender":     v.Sender.String(),
+					"chatId":     chatJID.String(),
+					"sender":     senderJID.String(),
 					"messageIds": msgIDs,
 					"type":       string(v.Type),
 					"timestamp":  v.Timestamp.Unix(),
@@ -199,14 +205,17 @@ func (m *MultiClientManager) handleEvent(deviceID string, evt interface{}) {
 
 	case *events.ChatPresence:
 		if m.rmqClient != nil {
+			chatJID := m.resolveLID(deviceID, v.Chat)
+			senderJID := m.resolveLID(deviceID, v.Sender)
+
 			payload := map[string]interface{}{
 				"event":       "presence.update",
 				"instance_id": deviceID,
 				"api_key":     apiKey,
 				"webhook_url": webhookUrl,
 				"data": map[string]interface{}{
-					"chatId": v.Chat.String(),
-					"sender": v.Sender.String(),
+					"chatId": chatJID.String(),
+					"sender": senderJID.String(),
 					"state":  string(v.State),
 					"media":  string(v.Media),
 				},
@@ -220,13 +229,15 @@ func (m *MultiClientManager) handleEvent(deviceID string, evt interface{}) {
 
 	case *events.Presence:
 		if m.rmqClient != nil {
+			fromJID := m.resolveLID(deviceID, v.From)
+
 			payload := map[string]interface{}{
 				"event":       "presence.update",
 				"instance_id": deviceID,
 				"api_key":     apiKey,
 				"webhook_url": webhookUrl,
 				"data": map[string]interface{}{
-					"sender":      v.From.String(),
+					"sender":      fromJID.String(),
 					"unavailable": v.Unavailable,
 					"lastSeen":    v.LastSeen.Format(time.RFC3339),
 				},
@@ -240,9 +251,12 @@ func (m *MultiClientManager) handleEvent(deviceID string, evt interface{}) {
 
 	case *events.GroupInfo:
 		if m.rmqClient != nil {
+			groupJID := m.resolveLID(deviceID, v.JID)
+			senderJID := m.resolveLID(deviceID, v.Sender)
+
 			data := map[string]interface{}{
-				"groupId":   v.JID.String(),
-				"sender":    v.Sender.String(),
+				"groupId":   groupJID.String(),
+				"sender":    senderJID.String(),
 				"timestamp": v.Timestamp.Unix(),
 			}
 			if v.Name != nil {
@@ -268,6 +282,8 @@ func (m *MultiClientManager) handleEvent(deviceID string, evt interface{}) {
 
 	case *events.CallOffer:
 		if m.rmqClient != nil {
+			fromJID := m.resolveLID(deviceID, v.From)
+
 			payload := map[string]interface{}{
 				"event":       "calls.offer",
 				"instance_id": deviceID,
@@ -275,7 +291,7 @@ func (m *MultiClientManager) handleEvent(deviceID string, evt interface{}) {
 				"webhook_url": webhookUrl,
 				"data": map[string]interface{}{
 					"callId":    v.CallID,
-					"sender":    v.From.String(),
+					"sender":    fromJID.String(),
 					"timestamp": v.Timestamp.Unix(),
 				},
 			}
@@ -774,3 +790,21 @@ func parseMessageContent(msg *waE2E.Message) (
 
 	return "unknown", nil, nil, nil, nil
 }
+
+func (m *MultiClientManager) resolveLID(deviceID string, jid types.JID) types.JID {
+	if jid.Server != "lid" {
+		return jid
+	}
+	m.mu.RLock()
+	client, ok := m.clients[deviceID]
+	m.mu.RUnlock()
+	if !ok || client == nil {
+		return jid
+	}
+	pn, err := client.Store.LIDs.GetPNForLID(context.Background(), jid)
+	if err == nil && !pn.IsEmpty() {
+		return pn
+	}
+	return jid
+}
+
