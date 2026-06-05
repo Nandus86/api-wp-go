@@ -249,7 +249,7 @@ func (m *MultiClientManager) handleEvent(deviceID string, evt interface{}) {
 				"webhook_url": webhookUrl,
 				"data": map[string]interface{}{
 					"callId":    v.CallID,
-					"sender":    v.Sender.String(),
+					"sender":    v.From.String(),
 					"timestamp": v.Timestamp.Unix(),
 				},
 			}
@@ -574,7 +574,7 @@ func parseMessageContent(msg *waE2E.Message) (string, map[string]interface{}) {
 		content["text"] = ext.GetText()
 		if ext.ContextInfo != nil {
 			ctxInfo := make(map[string]interface{})
-			ctxInfo["stanzaId"] = ext.ContextInfo.GetStanzaId()
+			ctxInfo["stanzaId"] = ext.ContextInfo.GetStanzaID()
 			ctxInfo["participant"] = ext.ContextInfo.GetParticipant()
 			if ext.ContextInfo.QuotedMessage != nil {
 				ctxInfo["quotedMessage"] = ext.ContextInfo.QuotedMessage.GetConversation()
@@ -608,7 +608,7 @@ func parseMessageContent(msg *waE2E.Message) (string, map[string]interface{}) {
 		content["mimetype"] = aud.GetMimetype()
 		content["fileLength"] = aud.GetFileLength()
 		content["url"] = aud.GetURL()
-		content["ptt"] = aud.GetPtt()
+		content["ptt"] = aud.GetPTT()
 		return "audioMessage", content
 	}
 
@@ -651,8 +651,8 @@ func parseMessageContent(msg *waE2E.Message) (string, map[string]interface{}) {
 		content["text"] = react.GetText()
 		if react.Key != nil {
 			reactKey := make(map[string]interface{})
-			reactKey["id"] = react.Key.GetId()
-			reactKey["remoteJid"] = react.Key.GetRemoteJid()
+			reactKey["id"] = react.Key.GetID()
+			reactKey["remoteJid"] = react.Key.GetRemoteJID()
 			reactKey["fromMe"] = react.Key.GetFromMe()
 			content["key"] = reactKey
 		}
@@ -673,7 +673,7 @@ func parseMessageContent(msg *waE2E.Message) (string, map[string]interface{}) {
 	if msg.PollUpdateMessage != nil {
 		vote := msg.GetPollUpdateMessage()
 		if vote.PollCreationMessageKey != nil {
-			content["pollMessageId"] = vote.PollCreationMessageKey.GetId()
+			content["pollMessageId"] = vote.PollCreationMessageKey.GetID()
 		}
 		return "pollUpdateMessage", content
 	}
