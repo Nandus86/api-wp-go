@@ -151,6 +151,8 @@ func (m *MultiClientManager) handleEvent(deviceID string, evt interface{}) {
 
 			// Map message types to BasileAPI types
 			bapiType := "text"
+			buttonOrListid := ""
+
 			if msgType == "imageMessage" {
 				bapiType = "image"
 			} else if msgType == "videoMessage" {
@@ -163,6 +165,26 @@ func (m *MultiClientManager) handleEvent(deviceID string, evt interface{}) {
 				bapiType = "contact"
 			} else if msgType == "locationMessage" {
 				bapiType = "location"
+			} else if resp := v.Message.GetListResponseMessage(); resp != nil {
+				bapiType = "list_response"
+				buttonOrListid = resp.GetSingleSelectReply().GetSelectedRowID()
+				textContent = resp.GetTitle()
+			} else if resp := v.Message.GetTemplateButtonReplyMessage(); resp != nil {
+				bapiType = "template_button_reply"
+				buttonOrListid = resp.GetSelectedID()
+				textContent = resp.GetSelectedDisplayText()
+			} else if resp := v.Message.GetInteractiveResponseMessage(); resp != nil {
+				if nf := resp.GetNativeFlowResponseMessage(); nf != nil {
+					bapiType = "native_flow_response"
+					
+					var params map[string]interface{}
+					if err := json.Unmarshal([]byte(nf.GetParamsJSON()), &params); err == nil {
+						if id, ok := params["id"].(string); ok {
+							buttonOrListid = id
+						}
+					}
+					textContent = nf.GetName()
+				}
 			}
 
 			bapiPayload := map[string]interface{}{
@@ -235,7 +257,7 @@ func (m *MultiClientManager) handleEvent(deviceID string, evt interface{}) {
 				"chatSource":   "updated",
 				"instanceName": instanceName,
 				"message": map[string]interface{}{
-					"buttonOrListid":   "",
+					"buttonOrListid":   buttonOrListid,
 					"chatid":           chatJID.String(),
 					"chatlid":          chatLid,
 					"content":          textContent,

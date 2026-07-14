@@ -124,12 +124,12 @@ func (w *Worker) handleSendMessage(body []byte) error {
 	client := w.manager.GetClient(payload.DeviceID)
 	if client == nil {
 		w.logger.Warn("Device not found for message sending", zap.String("deviceID", payload.DeviceID))
-		return fmt.Errorf("device not found")
+		return nil
 	}
 
 	if !client.IsConnected() {
 		w.logger.Warn("Device not connected", zap.String("deviceID", payload.DeviceID))
-		return fmt.Errorf("device not connected")
+		return nil
 	}
 
 	var remoteJID types.JID

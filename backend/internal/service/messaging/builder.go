@@ -2,16 +2,17 @@ package messaging
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.mau.fi/whatsmeow"
+	waBinary "go.mau.fi/whatsmeow/binary"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
-	waBinary "go.mau.fi/whatsmeow/binary"
 	"google.golang.org/protobuf/proto"
-	"crypto/rand"
 )
 
 type MessageBuilder struct {
@@ -151,23 +152,18 @@ func (b *MessageBuilder) WithCopyButton(text string, footer string, title string
 	return b
 }
 
-func (b *MessageBuilder) WithList(text string, footer string, title string, buttonText string, choices []string) *MessageBuilder {
-	buttonTextStr := buttonText
-	if buttonTextStr == "" {
-		buttonTextStr = "Ver Menu"
-	}
-
-	var sections []map[string]interface{}
-	var currentRows []map[string]interface{}
-	currentSectionTitle := "Opções"
+func (b *MessageBuilder) WithList(text, footer, title, buttonTextStr string, choices []string) *MessageBuilder {
+	// Parse choices into list items
+	var sections []*waE2E.ListMessage_Section
+	var currentRows []*waE2E.ListMessage_Row
+	currentSectionTitle := ""
 
 	for i, choice := range choices {
-		if len(choice) > 2 && choice[0] == '[' && choice[len(choice)-1] == ']' {
-			// Found a new section header
+		if strings.HasPrefix(choice, "[") && strings.HasSuffix(choice, "]") {
 			if len(currentRows) > 0 {
-				sections = append(sections, map[string]interface{}{
-					"title": currentSectionTitle,
-					"rows":  currentRows,
+				sections = append(sections, &waE2E.ListMessage_Section{
+					Title: proto.String(currentSectionTitle),
+					Rows:  currentRows,
 				})
 				currentRows = nil
 			}
@@ -187,55 +183,35 @@ func (b *MessageBuilder) WithList(text string, footer string, title string, butt
 			rowDesc = parts[2]
 		}
 
-		row := map[string]interface{}{
-			"id":    rowID,
-			"title": rowTitle,
+		row := &waE2E.ListMessage_Row{
+			RowID: proto.String(rowID),
+			Title: proto.String(rowTitle),
 		}
 		if rowDesc != "" {
-			row["description"] = rowDesc
+			row.Description = proto.String(rowDesc)
 		}
 		currentRows = append(currentRows, row)
 	}
 
 	if len(currentRows) > 0 {
-		sections = append(sections, map[string]interface{}{
-			"title": currentSectionTitle,
-			"rows":  currentRows,
+		sections = append(sections, &waE2E.ListMessage_Section{
+			Title: proto.String(currentSectionTitle),
+			Rows:  currentRows,
 		})
 	}
 
-	paramsMap := map[string]interface{}{
-		"title":    buttonTextStr,
-		"sections": sections,
-	}
-	paramsJSON, _ := json.Marshal(paramsMap)
-
-	nfButtons := []*waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton{
-		{
-			Name:             proto.String("single_select"),
-			ButtonParamsJSON: proto.String(string(paramsJSON)),
-		},
+	if buttonTextStr == "" {
+		buttonTextStr = "Menu"
 	}
 
-	msgVersion := int32(1)
-
-	interactiveMsg := &waE2E.InteractiveMessage{
-		Body: &waE2E.InteractiveMessage_Body{
-			Text: proto.String(text),
-		},
-		Footer: &waE2E.InteractiveMessage_Footer{
-			Text: proto.String(footer),
-		},
-		Header: &waE2E.InteractiveMessage_Header{
-			Title:              proto.String(title),
-			HasMediaAttachment: proto.Bool(false),
-		},
-		InteractiveMessage: &waE2E.InteractiveMessage_NativeFlowMessage_{
-			NativeFlowMessage: &waE2E.InteractiveMessage_NativeFlowMessage{
-				Buttons:        nfButtons,
-				MessageVersion: &msgVersion,
-			},
-		},
+	listType := waE2E.ListMessage_SINGLE_SELECT
+	listMessage := &waE2E.ListMessage{
+		Title:       proto.String(title),
+		Description: proto.String(text),
+		FooterText:  proto.String(footer),
+		ButtonText:  proto.String(buttonTextStr),
+		ListType:    &listType,
+		Sections:    sections,
 	}
 
 	btnMsgSecret := make([]byte, 32)
@@ -244,7 +220,7 @@ func (b *MessageBuilder) WithList(text string, footer string, title string, butt
 	b.msg = &waE2E.Message{
 		DocumentWithCaptionMessage: &waE2E.FutureProofMessage{
 			Message: &waE2E.Message{
-				InteractiveMessage: interactiveMsg,
+				ListMessage: listMessage,
 			},
 		},
 		MessageContextInfo: &waE2E.MessageContextInfo{
@@ -252,7 +228,26 @@ func (b *MessageBuilder) WithList(text string, footer string, title string, butt
 		},
 	}
 
-	b.extraNodes = nil // not needed for native flow
+	b.extraNodes = []waBinary.Node{
+		{
+			Tag: "biz",
+			Content: []waBinary.Node{{
+				Tag: "list",
+				Attrs: waBinary.Attrs{
+					"v":    "2",
+					"type": "single_select",
+				},
+			}},
+		},
+	}
+	// Append biz_bot node if not sending to a group (for broader iOS rendering compatibility)
+	if !strings.Contains(b.jid.String(), "@g.us") {
+		b.extraNodes = append(b.extraNodes, waBinary.Node{
+			Tag:   "bot",
+			Attrs: waBinary.Attrs{"biz_bot": "1"},
+		})
+	}
+
 	return b
 }
 
