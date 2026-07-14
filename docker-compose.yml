@@ -2,7 +2,8 @@ services:
   app:
     build: ./backend
     container_name: whatsmeow-app
-    # Removed direct port mapping to 8179 to force all traffic through Nginx
+    ports:
+      - "8080:8080"
     environment:
       - HTTP_PORT=8080
       - DB_DIALECT=postgres

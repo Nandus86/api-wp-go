@@ -48,10 +48,17 @@ type SendMessagePayload struct {
 	ListButton string `json:"listButton,omitempty"`
 
 	// payment / pix
-	Amount  float64 `json:"amount,omitempty"`
-	PixKey  string  `json:"pixKey,omitempty"`
-	PixType string  `json:"pixType,omitempty"`
-	PixName string  `json:"pixName,omitempty"`
+	Amount         float64 `json:"amount,omitempty"`
+	PixKey         string  `json:"pixKey,omitempty"`
+	PixType        string  `json:"pixType,omitempty"`
+	PixName        string  `json:"pixName,omitempty"`
+	ItemName       string  `json:"itemName,omitempty"`
+	InvoiceNumber  string  `json:"invoiceNumber,omitempty"`
+	PaymentLink    string  `json:"paymentLink,omitempty"`
+	FileUrl        string  `json:"fileUrl,omitempty"`
+	FileName       string  `json:"fileName,omitempty"`
+	BoletoCode     string  `json:"boletoCode,omitempty"`
+	AdditionalNote string  `json:"additionalNote,omitempty"`
 
 	// Carousel pseudo support
 	Carousel []CarouselCard `json:"carousel,omitempty"`
@@ -100,7 +107,7 @@ func (w *Worker) handleSendMessage(body []byte) error {
 		return nil
 	}
 
-	// Resolve aliases (Uazapi compatibility)
+	// Resolve aliases (Basileapi compatibility)
 	if payload.Number == "" && payload.Phone != "" {
 		payload.Number = payload.Phone
 	}

@@ -9,7 +9,9 @@ import (
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
+	waBinary "go.mau.fi/whatsmeow/binary"
 	"google.golang.org/protobuf/proto"
+	"crypto/rand"
 )
 
 type MessageBuilder struct {
@@ -18,6 +20,7 @@ type MessageBuilder struct {
 	msg           *waE2E.Message
 	retry         int
 	isInteractive bool
+	extraNodes    []waBinary.Node
 }
 
 func NewMessageBuilder(client *whatsmeow.Client, jidStr string) *MessageBuilder {
@@ -73,8 +76,19 @@ func (b *MessageBuilder) WithButtons(text string, footer string, title string, b
 		},
 	}
 
-	b.msg.Conversation = nil
-	b.msg.InteractiveMessage = interactiveMsg
+	btnMsgSecret := make([]byte, 32)
+	_, _ = rand.Read(btnMsgSecret)
+
+	b.msg = &waE2E.Message{
+		DocumentWithCaptionMessage: &waE2E.FutureProofMessage{
+			Message: &waE2E.Message{
+				InteractiveMessage: interactiveMsg,
+			},
+		},
+		MessageContextInfo: &waE2E.MessageContextInfo{
+			MessageSecret: btnMsgSecret,
+		},
+	}
 	return b
 }
 
@@ -121,47 +135,88 @@ func (b *MessageBuilder) WithCopyButton(text string, footer string, title string
 		},
 	}
 
-	b.msg.Conversation = nil
-	b.msg.InteractiveMessage = interactiveMsg
+	btnMsgSecret := make([]byte, 32)
+	_, _ = rand.Read(btnMsgSecret)
+
+	b.msg = &waE2E.Message{
+		DocumentWithCaptionMessage: &waE2E.FutureProofMessage{
+			Message: &waE2E.Message{
+				InteractiveMessage: interactiveMsg,
+			},
+		},
+		MessageContextInfo: &waE2E.MessageContextInfo{
+			MessageSecret: btnMsgSecret,
+		},
+	}
 	return b
 }
 
 func (b *MessageBuilder) WithList(text string, footer string, title string, buttonText string, choices []string) *MessageBuilder {
-	// Interactive messages blocked by WhatsApp for non-business accounts / unstable
-	// Using rich text format with Unicode box drawing for visual appeal (Working solution)
+	buttonTextStr := buttonText
+	if buttonTextStr == "" {
+		buttonTextStr = "Ver Menu"
+	}
 
-	listText := fmt.Sprintf("╔═══ *%s* ═══╗\n\n%s\n", title, text)
-
-	sectionCount := 0
+	var rows []*waE2E.ListMessage_Row
 	for i, choice := range choices {
-		if len(choice) > 2 && choice[0] == '[' && choice[len(choice)-1] == ']' {
-			// Section header with visual separator
-			if sectionCount > 0 {
-				listText += "\n"
-			}
-			listText += fmt.Sprintf("├─ *%s*\n", choice[1:len(choice)-1])
-			sectionCount++
-			continue
-		}
-
 		parts := splitChoice(choice)
 		rowTitle := parts[0]
 		rowDesc := ""
 		if len(parts) > 2 {
 			rowDesc = parts[2]
 		}
-
-		// Numbered list item
-		if rowDesc != "" {
-			listText += fmt.Sprintf("│  %d. *%s*\n│     _%s_\n", i+1, rowTitle, rowDesc)
-		} else {
-			listText += fmt.Sprintf("│  %d. %s\n", i+1, rowTitle)
-		}
+		
+		rows = append(rows, &waE2E.ListMessage_Row{
+			Title:       proto.String(rowTitle),
+			Description: proto.String(rowDesc),
+			RowID:       proto.String(fmt.Sprintf("row_%d", i)),
+		})
 	}
 
-	listText += fmt.Sprintf("\n╚═══════════════╝\n_%s_", footer)
+	sections := []*waE2E.ListMessage_Section{
+		{
+			Title: proto.String("Opções"),
+			Rows:  rows,
+		},
+	}
 
-	b.msg.Conversation = proto.String(listText)
+	listType := waE2E.ListMessage_SINGLE_SELECT
+	listMessage := &waE2E.ListMessage{
+		Title:       proto.String(title),
+		Description: proto.String(text),
+		ButtonText:  proto.String(buttonTextStr),
+		FooterText:  proto.String(footer),
+		ListType:    &listType,
+		Sections:    sections,
+	}
+
+	listMsgSecret := make([]byte, 32)
+	_, _ = rand.Read(listMsgSecret)
+
+	b.msg = &waE2E.Message{
+		DocumentWithCaptionMessage: &waE2E.FutureProofMessage{
+			Message: &waE2E.Message{
+				ListMessage: listMessage,
+			},
+		},
+		MessageContextInfo: &waE2E.MessageContextInfo{
+			MessageSecret: listMsgSecret,
+		},
+	}
+
+	b.extraNodes = []waBinary.Node{
+		{
+			Tag: "biz",
+			Content: []waBinary.Node{{
+				Tag: "list",
+				Attrs: waBinary.Attrs{
+					"v":    "2",
+					"type": "single_select",
+				},
+			}},
+		},
+	}
+
 	return b
 }
 
@@ -298,8 +353,19 @@ func (b *MessageBuilder) WithRequestLocationButton(text string, footer string, t
 		},
 	}
 
-	b.msg.Conversation = nil
-	b.msg.InteractiveMessage = interactiveMsg
+	btnMsgSecret := make([]byte, 32)
+	_, _ = rand.Read(btnMsgSecret)
+
+	b.msg = &waE2E.Message{
+		DocumentWithCaptionMessage: &waE2E.FutureProofMessage{
+			Message: &waE2E.Message{
+				InteractiveMessage: interactiveMsg,
+			},
+		},
+		MessageContextInfo: &waE2E.MessageContextInfo{
+			MessageSecret: btnMsgSecret,
+		},
+	}
 	return b
 }
 
@@ -312,8 +378,13 @@ func (b *MessageBuilder) Send(ctx context.Context) (string, error) {
 
 	var err error
 
+	extra := whatsmeow.SendRequestExtra{}
+	if len(b.extraNodes) > 0 {
+		extra.AdditionalNodes = &b.extraNodes
+	}
+
 	for i := 0; i <= b.retry; i++ {
-		resp, sendErr := b.client.SendMessage(ctx, b.jid, b.msg)
+		resp, sendErr := b.client.SendMessage(ctx, b.jid, b.msg, extra)
 		if sendErr == nil {
 			return resp.ID, nil
 		}

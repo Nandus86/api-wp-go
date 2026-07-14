@@ -98,10 +98,12 @@ func NewMultiClientManager(dbDialect, dbAddress string, dispatcher *EventDispatc
 func (m *MultiClientManager) handleEvent(deviceID string, evt interface{}) {
 	webhookUrl := ""
 	apiKey := ""
+	instanceName := deviceID
 	inst, err := m.instanceStore.GetInstanceByID(deviceID)
 	if err == nil && inst != nil {
 		webhookUrl = inst.WebhookURL
 		apiKey = inst.APIKey
+		instanceName = inst.Name
 	}
 
 	switch v := evt.(type) {
@@ -113,14 +115,14 @@ func (m *MultiClientManager) handleEvent(deviceID string, evt interface{}) {
 			m.instanceStore.IncrementMessageStat(deviceID, "out")
 		}
 
-		// Sniff incoming messages to capture the exact payload Uazapi uses
+		// Sniff incoming messages to capture the exact payload Basileapi uses
 		if v.Message != nil && (v.Message.GetInteractiveMessage() != nil || v.Message.GetViewOnceMessage() != nil || v.Message.GetViewOnceMessageV2() != nil || v.Message.GetViewOnceMessageV2Extension() != nil || v.Message.GetTemplateMessage() != nil || v.Message.GetButtonsMessage() != nil || v.Message.GetListMessage() != nil) {
 			waLog.Stdout("Sniffer", "INFO", true).Infof("\n\n====== INTERACTIVE MESSAGE SNIFFED ======\nJID: %s\nDeviceID: %d\nProtobuf:\n%+v\n==========================================\n\n", v.Info.Sender.String(), v.Info.Sender.Device, v.Message)
 		}
 
 		// Webhook forwarding
 		if m.rmqClient != nil {
-			msgType, content, contextInfo, reaction, poll := parseMessageContent(v.Message)
+			msgType, content, _, _, _ := parseMessageContent(v.Message)
 
 			var verifiedName string
 			if v.Info.VerifiedName != nil && v.Info.VerifiedName.Details != nil {
@@ -139,46 +141,141 @@ func (m *MultiClientManager) handleEvent(deviceID string, evt interface{}) {
 				chatLid = v.Info.Chat.ToNonAD().String()
 			}
 
-			payload := map[string]interface{}{
-				"event":       "messages.upsert",
-				"instance_id": deviceID,
-				"api_key":     apiKey,
-				"webhook_url": webhookUrl,
-				"data": map[string]interface{}{
-					"key": map[string]interface{}{
-						"id":          v.Info.ID,
-						"remoteJid":   chatJID.String(),
-						"fromMe":      v.Info.IsFromMe,
-						"participant": senderJID.String(),
-					},
-					"pushName":     v.Info.PushName,
-					"timestamp":    v.Info.Timestamp.Unix(),
-					"messageType":  msgType,
-					"message":      content,
-					"status": map[string]interface{}{
-						"isEphemeral": v.IsEphemeral,
-						"isViewOnce":  v.IsViewOnce || v.IsViewOnceV2,
-						"isEdit":      v.IsEdit,
-					},
-					"isGroup":      v.Info.IsGroup,
-					"device":       int(v.Info.Sender.Device),
-					"senderPhone":  senderJID.User,
-					"chatPhone":    chatJID.User,
-					"senderBare":   senderJID.ToNonAD().String(),
-					"chatBare":     chatJID.ToNonAD().String(),
-					"senderLid":    senderLid,
-					"chatLid":      chatLid,
-					"verifiedName": verifiedName,
-					"multicast":    v.Info.Multicast,
-					"mediaType":    v.Info.MediaType,
-					"contextInfo":  contextInfo,
-					"reaction":     reaction,
-					"poll":         poll,
-					"raw":          v.Message,
-				},
+			// Extract text content reliably
+			textContent := ""
+			if val, ok := content["text"].(string); ok {
+				textContent = val
+			} else if val, ok := content["conversation"].(string); ok {
+				textContent = val
 			}
 
-			body, err := json.Marshal(payload)
+			// Map message types to BasileAPI types
+			bapiType := "text"
+			if msgType == "imageMessage" {
+				bapiType = "image"
+			} else if msgType == "videoMessage" {
+				bapiType = "video"
+			} else if msgType == "audioMessage" {
+				bapiType = "audio"
+			} else if msgType == "documentMessage" {
+				bapiType = "document"
+			} else if msgType == "contactMessage" {
+				bapiType = "contact"
+			} else if msgType == "locationMessage" {
+				bapiType = "location"
+			}
+
+			bapiPayload := map[string]interface{}{
+				"BaseUrl":   "https://api.basileia.com",
+				"EventType": "messages",
+				"chat": map[string]interface{}{
+					"chatbot_agentResetMemoryAt": 0,
+					"chatbot_disableUntil":       0,
+					"chatbot_lastTriggerAt":      0,
+					"chatbot_lastTrigger_id":     "",
+					"id":                         fmt.Sprintf("r%x", time.Now().UnixNano()),
+					"image":                      "",
+					"imagePreview":               "",
+					"lead_assignedAttendant_id":  "",
+					"lead_email":                 "",
+					"lead_field01":               "",
+					"lead_field02":               "",
+					"lead_field03":               "",
+					"lead_field04":               "",
+					"lead_field05":               "",
+					"lead_field06":               "",
+					"lead_field07":               "",
+					"lead_field08":               "",
+					"lead_field09":               "",
+					"lead_field10":               "",
+					"lead_field11":               "",
+					"lead_field12":               "",
+					"lead_field13":               "",
+					"lead_field14":               "",
+					"lead_field15":               "",
+					"lead_field16":               "",
+					"lead_field17":               "",
+					"lead_field18":               "",
+					"lead_field19":               "",
+					"lead_field20":               "",
+					"lead_fullName":              v.Info.PushName,
+					"lead_isTicketOpen":          false,
+					"lead_kanbanOrder":           0,
+					"lead_name":                  v.Info.PushName,
+					"lead_notes":                 "",
+					"lead_personalid":            "",
+					"lead_status":                "",
+					"lead_tags":                  []string{},
+					"name":                       v.Info.PushName,
+					"owner":                      senderJID.User,
+					"phone":                      "+" + senderJID.User,
+					"wa_archived":                false,
+					"wa_chatid":                  chatJID.String(),
+					"wa_chatlid":                 chatLid,
+					"wa_contactName":             v.Info.PushName,
+					"wa_ephemeralExpiration":     0,
+					"wa_fastid":                  senderJID.User + ":" + chatJID.User,
+					"wa_isBlocked":               false,
+					"wa_isGroup":                 v.Info.IsGroup,
+					"wa_isGroup_admin":           false,
+					"wa_isGroup_announce":        false,
+					"wa_isGroup_community":       false,
+					"wa_isGroup_member":          false,
+					"wa_isPinned":                false,
+					"wa_label":                   []string{},
+					"wa_lastMessageSender":       senderLid,
+					"wa_lastMessageTextVote":     textContent,
+					"wa_lastMessageType":         "Conversation",
+					"wa_lastMsgTimestamp":        v.Info.Timestamp.UnixMilli(),
+					"wa_muteEndTime":             0,
+					"wa_name":                    verifiedName,
+					"wa_notes":                   "",
+					"wa_unreadCount":             1,
+				},
+				"chatSource":   "updated",
+				"instanceName": instanceName,
+				"message": map[string]interface{}{
+					"buttonOrListid":   "",
+					"chatid":           chatJID.String(),
+					"chatlid":          chatLid,
+					"content":          textContent,
+					"convertOptions":   "",
+					"edited":           "",
+					"fromMe":           v.Info.IsFromMe,
+					"groupName":        "",
+					"id":               senderJID.User + ":" + v.Info.ID,
+					"isGroup":          v.Info.IsGroup,
+					"mediaType":        v.Info.MediaType,
+					"messageTimestamp": v.Info.Timestamp.UnixMilli(),
+					"messageType":      "Conversation",
+					"messageid":        v.Info.ID,
+					"owner":            senderJID.User,
+					"pinned":           false,
+					"quoted":           "",
+					"reaction":         "",
+					"sender":           senderLid,
+					"senderName":       v.Info.PushName,
+					"sender_lid":       senderLid,
+					"sender_pn":        senderJID.String(),
+					"source":           "web",
+					"status":           "",
+					"text":             textContent,
+					"track_id":         "",
+					"track_source":     "",
+					"type":             bapiType,
+					"vote":             "",
+					"wasSentByApi":     false,
+				},
+				"owner": senderJID.User,
+				"token": apiKey,
+			}
+
+			envelope := map[string]interface{}{
+				"webhook_url": webhookUrl,
+				"payload":     bapiPayload,
+			}
+
+			body, err := json.Marshal(envelope)
 			if err == nil {
 				m.rmqClient.Publish(context.Background(), "webhook_events_queue", body)
 			}

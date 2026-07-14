@@ -3,145 +3,8 @@ package api
 import (
 	"encoding/json"
 	"net/http"
-	"time"
 )
 
-type UazInitRequest struct {
-	Name               string `json:"name"`
-	SystemName         string `json:"systemName"`
-	AdminField01       string `json:"adminField01"`
-	AdminField02       string `json:"adminField02"`
-	FingerprintProfile string `json:"fingerprintProfile"`
-	Browser            string `json:"browser"`
-}
-
-type UazInitResponse struct {
-	Response string      `json:"response"`
-	Instance UazInstance `json:"instance"`
-	Token    string      `json:"token"`
-}
-
-type UazInstance struct {
-	ID         string `json:"id"`
-	Token      string `json:"token"`
-	Status     string `json:"status"`
-	Name       string `json:"name"`
-	SystemName string `json:"systemName"`
-	Created    string `json:"created"`
-}
-
-// InitInstance creates a new UazAPI-compatible instance
-// @Summary Create UazAPI Instance
-// @Description Creates a new WhatsApp instance compatible with UazAPI guidelines. Returns a token to be used in the header for subsequent requests.
-// @Tags uazapi-instance
-// @Accept json
-// @Produce json
-// @Param request body UazInitRequest true "Instance Configuration"
-// @Success 200 {object} UazInitResponse
-// @Failure 400 {string} string "Invalid request body or missing name"
-// @Failure 500 {string} string "Failed to create instance"
-// @Router /instance/init [post]
-func (h *Handler) InitInstance(w http.ResponseWriter, r *http.Request) {
-	// Optional: Check admintoken header
-	// adminToken := r.Header.Get("admintoken")
-
-	var req UazInitRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	if req.Name == "" {
-		http.Error(w, "Name is required", http.StatusBadRequest)
-		return
-	}
-
-	// For compatibility mapping token to our instance ID
-	createdInstanceID, _, _, err := h.manager.NewClientWithName("", "", req.Name, "", "")
-	if err != nil {
-		http.Error(w, "Failed to create instance", http.StatusInternalServerError)
-		return
-	}
-
-	res := UazInitResponse{
-		Response: "Instance created successfully",
-		Token:    createdInstanceID, // We use our ID as their token
-		Instance: UazInstance{
-			ID:         createdInstanceID,
-			Token:      createdInstanceID,
-			Status:     "disconnected",
-			Name:       req.Name,
-			SystemName: req.SystemName,
-			Created:    time.Now().Format(time.RFC3339),
-		},
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(res)
-}
-
-// ConnectInstance connects an existing UazAPI instance to WhatsApp
-// @Summary Connect UazAPI Instance
-// @Description Connects the instance to WhatsApp and returns a base64 QR Code if not logged in.
-// @Tags uazapi-instance
-// @Accept json
-// @Produce json
-// @Param token header string true "Instance Token"
-// @Success 200 {object} map[string]interface{} "Connection status or QR code"
-// @Failure 401 {string} string "Unauthorized: missing token"
-// @Failure 404 {string} string "Device not found or not loaded"
-// @Failure 500 {string} string "Failed to connect"
-// @Failure 504 {string} string "Timeout waiting for QR"
-// @Router /instance/connect [post]
-func (h *Handler) ConnectInstance(w http.ResponseWriter, r *http.Request) {
-	token := r.Header.Get("token")
-	if token == "" {
-		http.Error(w, "Unauthorized: missing token", http.StatusUnauthorized)
-		return
-	}
-
-	client := h.manager.GetClient(token)
-	if client == nil {
-		http.Error(w, "Device not found or not loaded", http.StatusNotFound)
-		return
-	}
-
-	if client.IsConnected() {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"connected": true,
-			"loggedIn":  true,
-		})
-		return
-	}
-
-	// Reconnect and fetch QR using GetQR which connects automatically
-	qrChan, err := h.manager.GetQR(r.Context(), token)
-	if err != nil {
-		http.Error(w, "Failed to connect", http.StatusInternalServerError)
-		return
-	}
-
-	// Wait for the first QR code to match UazAPI synchronous standard
-	select {
-	case code := <-qrChan:
-		// Uazapi returns base64 image here. 
-		// For simplicity, we just return the raw string to be encoded in frontend 
-		// or they can generate QR from it.
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"connected": false,
-			"loggedIn":  false,
-			"instance": map[string]string{
-				"qrcode": code, 
-			},
-		})
-		return
-	case <-time.After(15 * time.Second):
-		http.Error(w, "Timeout waiting for QR", http.StatusGatewayTimeout)
-		return
-	}
-}
 
 // UazSendMessageRequest represents the payload for UazAPI message endpoints
 type UazSendMessageRequest struct {
@@ -202,9 +65,15 @@ type UazSendMessageRequest struct {
 // @Router /send/request-payment [post]
 // @Router /send/pix-button [post]
 func (h *Handler) SendUazGeneric(w http.ResponseWriter, r *http.Request) {
-	token := r.Header.Get("token")
+	token := r.Header.Get("api_key")
 	if token == "" {
-		http.Error(w, "Unauthorized: missing token", http.StatusUnauthorized)
+		token = r.Header.Get("x-api-key")
+	}
+	if token == "" {
+		token = r.Header.Get("token") // fallback for legacy
+	}
+	if token == "" {
+		http.Error(w, "Unauthorized: missing api_key", http.StatusUnauthorized)
 		return
 	}
 
@@ -299,9 +168,15 @@ func (h *Handler) SendUazGeneric(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {string} string "Failed to enqueue message"
 // @Router /send/text [post]
 func (h *Handler) SendUazText(w http.ResponseWriter, r *http.Request) {
-	token := r.Header.Get("token")
+	token := r.Header.Get("api_key")
 	if token == "" {
-		http.Error(w, "Unauthorized: missing token", http.StatusUnauthorized)
+		token = r.Header.Get("x-api-key")
+	}
+	if token == "" {
+		token = r.Header.Get("token") // fallback for legacy
+	}
+	if token == "" {
+		http.Error(w, "Unauthorized: missing api_key", http.StatusUnauthorized)
 		return
 	}
 
@@ -355,9 +230,15 @@ func (h *Handler) SendUazText(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {string} string "Failed to enqueue message"
 // @Router /send/media [post]
 func (h *Handler) SendUazMedia(w http.ResponseWriter, r *http.Request) {
-	token := r.Header.Get("token")
+	token := r.Header.Get("api_key")
 	if token == "" {
-		http.Error(w, "Unauthorized: missing token", http.StatusUnauthorized)
+		token = r.Header.Get("x-api-key")
+	}
+	if token == "" {
+		token = r.Header.Get("token") // fallback for legacy
+	}
+	if token == "" {
+		http.Error(w, "Unauthorized: missing api_key", http.StatusUnauthorized)
 		return
 	}
 

@@ -36,12 +36,16 @@ func (w *Worker) Start() {
 }
 
 func (w *Worker) handleWebhookEvent(body []byte) error {
-	var payload struct {
-		WebhookURL string `json:"webhook_url"`
+	var envelope struct {
+		WebhookURL string          `json:"webhook_url"`
+		Payload    json.RawMessage `json:"payload"`
 	}
-	json.Unmarshal(body, &payload)
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		w.logger.Error("Failed to unmarshal webhook envelope", zap.Error(err))
+		return nil
+	}
 
-	targetURL := payload.WebhookURL
+	targetURL := envelope.WebhookURL
 	if targetURL == "" {
 		targetURL = w.webhookURL
 	}
@@ -51,9 +55,15 @@ func (w *Worker) handleWebhookEvent(body []byte) error {
 		return nil
 	}
 
+	// If the payload is empty (legacy format or error), fallback to full body for backward compatibility
+	bodyToSend := envelope.Payload
+	if len(bodyToSend) == 0 {
+		bodyToSend = body
+	}
+
 	maxRetries := 3
 	for i := 0; i < maxRetries; i++ {
-		req, err := http.NewRequest(http.MethodPost, targetURL, bytes.NewBuffer(body))
+		req, err := http.NewRequest(http.MethodPost, targetURL, bytes.NewBuffer(bodyToSend))
 		if err != nil {
 			w.logger.Error("Failed to create webhook request", zap.Error(err))
 			return nil // Drop message

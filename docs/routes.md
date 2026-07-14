@@ -1,0 +1,140 @@
+# UAZAPI Routes
+- **[Admininstração]** POST /instance/create
+- **[Admininstração]** GET /instance/all
+- **[Instancia]** POST /instance/connect
+- **[Instancia]** POST /instance/disconnect
+- **[Instancia]** POST /instance/reset
+- **[Instancia]** GET /instance/status
+- **[Instancia]** GET /instance/wa_messages_limits
+- **[CRM]** POST /instance/updateFieldsMap
+- **[Instancia]** POST /instance/updateInstanceName
+- **[Admininstração]** POST /instance/updateAdminFields
+- **[Proxy]** GET /instance/proxy
+- **[Proxy]** POST /instance/proxy
+- **[Proxy]** GET /proxy-managed/cities
+- **[Perfil]** POST /profile/name
+- **[Perfil]** POST /profile/image
+- **[Instancia]** DELETE /instance
+- **[Instancia]** GET /instance/privacy
+- **[Instancia]** POST /instance/privacy
+- **[Instancia]** POST /instance/presence
+- **[Enviar Mensagem]** POST /send/text
+- **[Enviar Mensagem]** POST /send/media
+- **[Enviar Mensagem]** POST /send/contact
+- **[Enviar Mensagem]** POST /send/location
+- **[Enviar Mensagem]** POST /message/presence
+- **[Enviar Mensagem]** POST /send/status
+- **[Enviar Mensagem]** POST /send/menu
+- **[Enviar Mensagem]** POST /send/carousel
+- **[Enviar Mensagem]** POST /send/location-button
+- **[Enviar Mensagem]** POST /send/request-payment
+- **[Enviar Mensagem]** POST /send/pix-button
+- **[Mensagem Async]** GET /message/async
+- **[Mensagem Async]** DELETE /message/async
+- **[Mensagem Async]** POST /instance/updateDelaySettings
+- **[Ações na mensagem e Buscar]** POST /message/download
+- **[Ações na mensagem e Buscar]** POST /message/find
+- **[Ações na mensagem e Buscar]** POST /message/history-sync
+- **[Ações na mensagem e Buscar]** POST /message/markread
+- **[Ações na mensagem e Buscar]** POST /message/react
+- **[Ações na mensagem e Buscar]** POST /message/delete
+- **[Ações na mensagem e Buscar]** POST /message/edit
+- **[Ações na mensagem e Buscar]** POST /message/pin
+- **[Grupos e Comunidades]** POST /group/create
+- **[Grupos e Comunidades]** POST /group/info
+- **[Grupos e Comunidades]** POST /group/inviteInfo
+- **[Grupos e Comunidades]** POST /group/join
+- **[Grupos e Comunidades]** POST /group/leave
+- **[Grupos e Comunidades]** GET /group/list
+- **[Grupos e Comunidades]** POST /group/list
+- **[Grupos e Comunidades]** POST /group/resetInviteCode
+- **[Grupos e Comunidades]** POST /group/updateAnnounce
+- **[Grupos e Comunidades]** POST /group/updateJoinApproval
+- **[Grupos e Comunidades]** POST /group/updateMemberAddMode
+- **[Grupos e Comunidades]** POST /group/updateDescription
+- **[Grupos e Comunidades]** POST /group/ephemeral
+- **[Grupos e Comunidades]** POST /group/updateImage
+- **[Grupos e Comunidades]** POST /group/updateLocked
+- **[Grupos e Comunidades]** POST /group/updateName
+- **[Grupos e Comunidades]** POST /group/updateParticipants
+- **[Grupos e Comunidades]** POST /community/create
+- **[Grupos e Comunidades]** POST /community/editgroups
+- **[Newsletters e Canais]** POST /newsletter/create
+- **[Newsletters e Canais]** GET /newsletter/list
+- **[Newsletters e Canais]** POST /newsletter/info
+- **[Newsletters e Canais]** POST /newsletter/link
+- **[Newsletters e Canais]** POST /newsletter/subscribe
+- **[Newsletters e Canais]** POST /newsletter/messages
+- **[Newsletters e Canais]** POST /newsletter/messages/edit
+- **[Newsletters e Canais]** POST /newsletter/messages/delete
+- **[Newsletters e Canais]** POST /newsletter/updates
+- **[Newsletters e Canais]** POST /newsletter/viewed
+- **[Newsletters e Canais]** POST /newsletter/reaction
+- **[Newsletters e Canais]** POST /newsletter/follow
+- **[Newsletters e Canais]** POST /newsletter/unfollow
+- **[Newsletters e Canais]** POST /newsletter/mute
+- **[Newsletters e Canais]** POST /newsletter/unmute
+- **[Newsletters e Canais]** POST /newsletter/delete
+- **[Newsletters e Canais]** POST /newsletter/picture
+- **[Newsletters e Canais]** POST /newsletter/name
+- **[Newsletters e Canais]** POST /newsletter/description
+- **[Newsletters e Canais]** POST /newsletter/settings
+- **[Newsletters e Canais]** POST /newsletter/search
+- **[Newsletters e Canais]** POST /newsletter/admin/invite
+- **[Newsletters e Canais]** POST /newsletter/admin/accept
+- **[Newsletters e Canais]** POST /newsletter/admin/remove
+- **[Newsletters e Canais]** POST /newsletter/admin/revoke
+- **[Newsletters e Canais]** POST /newsletter/owner/transfer
+- **[Webhooks e SSE]** GET /webhook
+- **[Webhooks e SSE]** POST /webhook
+- **[Webhooks e SSE]** GET /webhook/errors
+- **[Admininstração]** GET /globalwebhook
+- **[Admininstração]** POST /globalwebhook
+- **[Admininstração]** GET /globalwebhook/errors
+- **[Webhooks e SSE]** GET /sse
+- **[Mensagem em massa]** POST /sender/simple
+- **[Mensagem em massa]** POST /sender/advanced
+- **[Mensagem em massa]** POST /sender/edit
+- **[Mensagem em massa]** POST /sender/cleardone
+- **[Mensagem em massa]** DELETE /sender/clearall
+- **[Mensagem em massa]** GET /sender/listfolders
+- **[Mensagem em massa]** POST /sender/listmessages
+- **[Bloqueios]** POST /chat/block
+- **[Bloqueios]** GET /chat/blocklist
+- **[Etiquetas]** POST /chat/labels
+- **[Chats]** POST /chat/delete
+- **[Chats]** POST /chat/archive
+- **[Chats]** POST /chat/ephemeral
+- **[Chats]** POST /chat/read
+- **[Chats]** POST /chat/mute
+- **[Chats]** POST /chat/pin
+- **[Chats]** POST /chat/find
+- **[Chats]** POST /chat/notes
+- **[Chats]** POST /chat/notes/refresh
+- **[Chats]** POST /chat/notes/edit
+- **[CRM]** POST /chat/editLead
+- **[Contatos]** GET /contacts
+- **[Contatos]** POST /contacts/list
+- **[Contatos]** POST /contact/add
+- **[Contatos]** POST /contact/remove
+- **[Contatos]** POST /chat/details
+- **[Contatos]** POST /chat/check
+- **[Etiquetas]** POST /label/edit
+- **[Etiquetas]** GET /labels
+- **[Etiquetas]** POST /labels/refresh
+- **[Respostas Rápidas]** POST /quickreply/edit
+- **[Respostas Rápidas]** GET /quickreply/showall
+- **[Chamadas]** POST /call/make
+- **[Chamadas]** POST /call/reject
+- **[Integração Chatwoot]** GET /chatwoot/config
+- **[Integração Chatwoot]** PUT /chatwoot/config
+- **[Business]** POST /business/get/profile
+- **[Business]** GET /business/get/categories
+- **[Business]** POST /business/update/profile
+- **[Business]** POST /business/catalog/list
+- **[Business]** POST /business/catalog/info
+- **[Business]** POST /business/catalog/delete
+- **[Business]** POST /business/catalog/show
+- **[Business]** POST /business/catalog/hide
+- **[Admininstração]** POST /admin/restart
+- **[Admininstração]** POST /admin/token/rotate

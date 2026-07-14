@@ -19,27 +19,27 @@ import (
 type SendMessageRequest struct {
 	DeviceID   string   `json:"device_id,omitempty"`
 	Number     string   `json:"number,omitempty"`
-	Phone      string   `json:"phone,omitempty" swaggerignore:"true"`     // Uazapi alias for Number
+	Phone      string   `json:"phone,omitempty" swaggerignore:"true"`     // Basileapi alias for Number
 	Message    string   `json:"message,omitempty"`
-	Text       string   `json:"text,omitempty" swaggerignore:"true"`       // Uazapi alias for Message
+	Text       string   `json:"text,omitempty" swaggerignore:"true"`       // Basileapi alias for Message
 	Footer     string   `json:"footer,omitempty"`
-	FooterText string   `json:"footerText,omitempty" swaggerignore:"true"` // Uazapi alias for Footer
+	FooterText string   `json:"footerText,omitempty" swaggerignore:"true"` // Basileapi alias for Footer
 	Title      string   `json:"title,omitempty"`
 	Type       string   `json:"type,omitempty"`       // button, list
 	Buttons    []string `json:"buttons,omitempty"`
-	Choices    []string `json:"choices,omitempty" swaggerignore:"true"`    // Uazapi alias for Buttons
+	Choices    []string `json:"choices,omitempty" swaggerignore:"true"`    // Basileapi alias for Buttons
 	ListButton string   `json:"listButton,omitempty" swaggerignore:"true"` // for list button text
 }
 
 type SendMediaRequest struct {
 	DeviceID   string `json:"device_id"`
 	Number     string `json:"number,omitempty"`
-	Phone      string `json:"phone,omitempty" swaggerignore:"true"` // Uazapi alias for Number
+	Phone      string `json:"phone,omitempty" swaggerignore:"true"` // Basileapi alias for Number
 	MediaURL   string `json:"media_url,omitempty"` // Public URL to download the media from
 	Base64     string `json:"base64,omitempty"`    // Base64 encoded media string (e.g. data:image/png;base64,...)
 	Type       string `json:"type"`                // image, video, document, audio
 	Caption    string `json:"caption,omitempty"`
-	Text       string `json:"text,omitempty" swaggerignore:"true"` // Uazapi alias for Caption
+	Text       string `json:"text,omitempty" swaggerignore:"true"` // Basileapi alias for Caption
 	MimeType   string `json:"mimetype,omitempty"`
 	FileName   string `json:"fileName,omitempty"`
 }
@@ -72,45 +72,41 @@ func (h *Handler) Router() http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 
-	r.Post("/device", h.CreateDevice)
-	r.Get("/device", h.ListDevices)
-	r.Put("/device/{id}/rename", h.RenameDevice)
-	r.Delete("/device/{id}", h.DeleteDevice)
-	r.Post("/device/{id}/reconnect", h.ReconnectDevice)
-	r.Put("/device/{id}/webhook", h.UpdateDeviceWebhook)
-	r.Put("/device/{id}/proxy", h.UpdateDeviceProxy)
-	r.Get("/device/{id}/qr", h.GetQR)
-	r.Get("/device/{id}/status", h.GetStatus)
-	r.Put("/device/{id}/credentials", h.UpdateDeviceCredentials)
-	r.Post("/message/send", h.SendText)
-	r.Post("/message/interactive/button", h.SendInteractiveButton)
-	r.Post("/message/interactive/copy", h.SendInteractiveCopyButton)
-	r.Post("/message/media", h.SendMedia)
-	r.Post("/message/presence", h.SendUazGeneric)
-	r.Get("/logs", h.GetLogs)
-	r.Get("/stats", h.GetStats)
-
 	r.Get("/docs/*", httpSwagger.Handler(
 		httpSwagger.URL("/docs/doc.json"), //The url pointing to API definition
 	))
 
-	// Uazapi compatible routes
-	r.Route("/instance", func(r chi.Router) {
-		r.Post("/init", h.InitInstance)
-		r.Post("/connect", h.ConnectInstance)
-		// r.Get("/all", h.ListInstancesUaz) // To be added later if needed
-	})
-	r.Route("/send", func(r chi.Router) {
-		r.Post("/text", h.SendUazText)
-		r.Post("/media", h.SendUazMedia)
-		r.Post("/contact", h.SendUazGeneric)
-		r.Post("/location", h.SendUazGeneric)
-		r.Post("/status", h.SendUazGeneric)
-		r.Post("/menu", h.SendUazGeneric)
-		r.Post("/carousel", h.SendUazGeneric)
-		r.Post("/location-button", h.SendUazGeneric)
-		r.Post("/request-payment", h.SendUazGeneric)
-		r.Post("/pix-button", h.SendUazGeneric)
+	r.Route("/api", func(apiRouter chi.Router) {
+		apiRouter.Post("/device", h.CreateDevice)
+		apiRouter.Get("/device", h.ListDevices)
+		apiRouter.Put("/device/{id}/rename", h.RenameDevice)
+		apiRouter.Delete("/device/{id}", h.DeleteDevice)
+		apiRouter.Post("/device/{id}/reconnect", h.ReconnectDevice)
+		apiRouter.Put("/device/{id}/webhook", h.UpdateDeviceWebhook)
+		apiRouter.Put("/device/{id}/proxy", h.UpdateDeviceProxy)
+		apiRouter.Get("/device/{id}/qr", h.GetQR)
+		apiRouter.Get("/device/{id}/status", h.GetStatus)
+		apiRouter.Put("/device/{id}/credentials", h.UpdateDeviceCredentials)
+		apiRouter.Post("/message/send", h.SendText)
+		apiRouter.Post("/message/interactive/button", h.SendInteractiveButton)
+		apiRouter.Post("/message/interactive/copy", h.SendInteractiveCopyButton)
+		apiRouter.Post("/message/media", h.SendMedia)
+		apiRouter.Get("/logs", h.GetLogs)
+		apiRouter.Get("/stats", h.GetStats)
+
+		// Basileapi compatible routes (Messages only)
+		apiRouter.Route("/send", func(r chi.Router) {
+			r.Post("/text", h.SendUazText)
+			r.Post("/media", h.SendUazMedia)
+			r.Post("/contact", h.SendUazGeneric)
+			r.Post("/location", h.SendUazGeneric)
+			r.Post("/status", h.SendUazGeneric)
+			r.Post("/menu", h.SendUazGeneric)
+			r.Post("/carousel", h.SendUazGeneric)
+			r.Post("/location-button", h.SendUazGeneric)
+			r.Post("/request-payment", h.SendUazGeneric)
+			r.Post("/pix-button", h.SendUazGeneric)
+		})
 	})
 
 	return r
@@ -470,6 +466,14 @@ func (h *Handler) SendInteractiveButton(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	apiKey := r.Header.Get("api_key")
+	if apiKey == "" {
+		apiKey = r.Header.Get("x-api-key")
+	}
+	if apiKey != "" && req.DeviceID == "" {
+		req.DeviceID = apiKey
+	}
+
 	payloadBytes, err := json.Marshal(req)
 	if err != nil {
 		http.Error(w, "Failed to encode message to queue", http.StatusInternalServerError)
@@ -500,6 +504,14 @@ func (h *Handler) SendText(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
+	}
+
+	apiKey := r.Header.Get("api_key")
+	if apiKey == "" {
+		apiKey = r.Header.Get("x-api-key")
+	}
+	if apiKey != "" && req.DeviceID == "" {
+		req.DeviceID = apiKey
 	}
 
 	// Forcing type to empty so builder creates a text message
@@ -537,6 +549,14 @@ func (h *Handler) SendMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	apiKey := r.Header.Get("api_key")
+	if apiKey == "" {
+		apiKey = r.Header.Get("x-api-key")
+	}
+	if apiKey != "" && req.DeviceID == "" {
+		req.DeviceID = apiKey
+	}
+
 	payloadBytes, err := json.Marshal(req)
 	if err != nil {
 		http.Error(w, "Failed to encode message to queue", http.StatusInternalServerError)
@@ -567,6 +587,14 @@ func (h *Handler) SendInteractiveCopyButton(w http.ResponseWriter, r *http.Reque
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
+	}
+
+	apiKey := r.Header.Get("api_key")
+	if apiKey == "" {
+		apiKey = r.Header.Get("x-api-key")
+	}
+	if apiKey != "" && req.DeviceID == "" {
+		req.DeviceID = apiKey
 	}
 
 	payloadBytes, err := json.Marshal(req)

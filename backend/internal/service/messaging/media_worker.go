@@ -27,7 +27,7 @@ type SendMediaPayload struct {
 	Base64   string `json:"base64,omitempty"`
 	Type     string `json:"type"` // image, video, document, audio
 	Caption  string `json:"caption,omitempty"`
-	Text     string `json:"text,omitempty"` // Uazapi alias for Caption
+	Text     string `json:"text,omitempty"` // Basileapi alias for Caption
 	MimeType string `json:"mimetype,omitempty"`
 	FileName string `json:"fileName,omitempty"`
 }
