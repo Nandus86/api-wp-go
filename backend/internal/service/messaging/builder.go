@@ -157,66 +157,102 @@ func (b *MessageBuilder) WithList(text string, footer string, title string, butt
 		buttonTextStr = "Ver Menu"
 	}
 
-	var rows []*waE2E.ListMessage_Row
+	var sections []map[string]interface{}
+	var currentRows []map[string]interface{}
+	currentSectionTitle := "Opções"
+
 	for i, choice := range choices {
+		if len(choice) > 2 && choice[0] == '[' && choice[len(choice)-1] == ']' {
+			// Found a new section header
+			if len(currentRows) > 0 {
+				sections = append(sections, map[string]interface{}{
+					"title": currentSectionTitle,
+					"rows":  currentRows,
+				})
+				currentRows = nil
+			}
+			currentSectionTitle = choice[1 : len(choice)-1]
+			continue
+		}
+
 		parts := splitChoice(choice)
 		rowTitle := parts[0]
+		rowID := fmt.Sprintf("row_%d", i)
 		rowDesc := ""
+
+		if len(parts) > 1 {
+			rowID = parts[1]
+		}
 		if len(parts) > 2 {
 			rowDesc = parts[2]
 		}
-		
-		rows = append(rows, &waE2E.ListMessage_Row{
-			Title:       proto.String(rowTitle),
-			Description: proto.String(rowDesc),
-			RowID:       proto.String(fmt.Sprintf("row_%d", i)),
+
+		row := map[string]interface{}{
+			"id":    rowID,
+			"title": rowTitle,
+		}
+		if rowDesc != "" {
+			row["description"] = rowDesc
+		}
+		currentRows = append(currentRows, row)
+	}
+
+	if len(currentRows) > 0 {
+		sections = append(sections, map[string]interface{}{
+			"title": currentSectionTitle,
+			"rows":  currentRows,
 		})
 	}
 
-	sections := []*waE2E.ListMessage_Section{
+	paramsMap := map[string]interface{}{
+		"title":    buttonTextStr,
+		"sections": sections,
+	}
+	paramsJSON, _ := json.Marshal(paramsMap)
+
+	nfButtons := []*waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton{
 		{
-			Title: proto.String("Opções"),
-			Rows:  rows,
+			Name:             proto.String("single_select"),
+			ButtonParamsJSON: proto.String(string(paramsJSON)),
 		},
 	}
 
-	listType := waE2E.ListMessage_SINGLE_SELECT
-	listMessage := &waE2E.ListMessage{
-		Title:       proto.String(title),
-		Description: proto.String(text),
-		ButtonText:  proto.String(buttonTextStr),
-		FooterText:  proto.String(footer),
-		ListType:    &listType,
-		Sections:    sections,
+	msgVersion := int32(1)
+
+	interactiveMsg := &waE2E.InteractiveMessage{
+		Body: &waE2E.InteractiveMessage_Body{
+			Text: proto.String(text),
+		},
+		Footer: &waE2E.InteractiveMessage_Footer{
+			Text: proto.String(footer),
+		},
+		Header: &waE2E.InteractiveMessage_Header{
+			Title:              proto.String(title),
+			HasMediaAttachment: proto.Bool(false),
+		},
+		InteractiveMessage: &waE2E.InteractiveMessage_NativeFlowMessage_{
+			NativeFlowMessage: &waE2E.InteractiveMessage_NativeFlowMessage{
+				Buttons:        nfButtons,
+				MessageVersion: &msgVersion,
+			},
+		},
 	}
 
-	listMsgSecret := make([]byte, 32)
-	_, _ = rand.Read(listMsgSecret)
+	btnMsgSecret := make([]byte, 32)
+	_, _ = rand.Read(btnMsgSecret)
 
 	b.msg = &waE2E.Message{
 		DocumentWithCaptionMessage: &waE2E.FutureProofMessage{
 			Message: &waE2E.Message{
-				ListMessage: listMessage,
+				InteractiveMessage: interactiveMsg,
 			},
 		},
 		MessageContextInfo: &waE2E.MessageContextInfo{
-			MessageSecret: listMsgSecret,
+			MessageSecret: btnMsgSecret,
 		},
 	}
 
-	b.extraNodes = []waBinary.Node{
-		{
-			Tag: "biz",
-			Content: []waBinary.Node{{
-				Tag: "list",
-				Attrs: waBinary.Attrs{
-					"v":    "2",
-					"type": "single_select",
-				},
-			}},
-		},
-	}
-
+	b.extraNodes = nil // not needed for native flow
 	return b
 }
 
