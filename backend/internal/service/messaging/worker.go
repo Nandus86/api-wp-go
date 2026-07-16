@@ -47,6 +47,11 @@ type SendMessagePayload struct {
 	// Menu / List
 	ListButton string `json:"listButton,omitempty"`
 
+	// Poll
+	Question  string   `json:"question,omitempty"`
+	Options   []string `json:"options,omitempty"`
+	MaxAnswer int      `json:"maxAnswer,omitempty"`
+
 	// payment / pix
 	Amount         float64 `json:"amount,omitempty"`
 	PixKey         string  `json:"pixKey,omitempty"`
@@ -101,11 +106,31 @@ func (w *Worker) Start() {
 }
 
 func (w *Worker) handleSendMessage(body []byte) error {
+	fmt.Printf("\n\n====== WORKER: Received message from RabbitMQ ======\n")
+	fmt.Printf("Raw JSON: %s\n", string(body))
+	
 	var payload SendMessagePayload
 	if err := json.Unmarshal(body, &payload); err != nil {
 		w.logger.Error("Failed to unmarshal message payload", zap.Error(err))
+		fmt.Printf("ERROR: Failed to unmarshal: %v\n", err)
 		return nil
 	}
+
+	fmt.Printf("Parsed Payload:\n")
+	fmt.Printf("  DeviceID: %s\n", payload.DeviceID)
+	fmt.Printf("  Number: %s\n", payload.Number)
+	fmt.Printf("  Type: %s\n", payload.Type)
+	fmt.Printf("  Message: %s\n", payload.Message)
+	fmt.Printf("  Title: %s\n", payload.Title)
+	fmt.Printf("  Footer: %s\n", payload.Footer)
+	fmt.Printf("  ListButton: %s\n", payload.ListButton)
+	fmt.Printf("  Buttons: %v\n", payload.Buttons)
+	fmt.Printf("  Choices: %v\n", payload.Choices)
+	fmt.Printf("  Options: %v\n", payload.Options)
+	fmt.Printf("  CopyCode: %s\n", payload.CopyCode)
+	fmt.Printf("  Question: %s\n", payload.Question)
+	fmt.Printf("  MaxAnswer: %d\n", payload.MaxAnswer)
+	fmt.Printf("==========================================\n\n")
 
 	// Resolve aliases (Basileapi compatibility)
 	if payload.Number == "" && payload.Phone != "" {
@@ -119,6 +144,9 @@ func (w *Worker) handleSendMessage(body []byte) error {
 	}
 	if len(payload.Buttons) == 0 && len(payload.Choices) > 0 {
 		payload.Buttons = payload.Choices
+	}
+	if len(payload.Options) == 0 && len(payload.Choices) > 0 {
+		payload.Options = payload.Choices
 	}
 
 	client := w.manager.GetClient(payload.DeviceID)
@@ -173,28 +201,45 @@ func (w *Worker) handleSendMessage(body []byte) error {
 
 	builder := NewMessageBuilder(client, remoteJID.String())
 
+	fmt.Printf("\n====== WORKER: Building message ======\n")
 	if payload.Type == "contact" {
+		fmt.Printf("Builder method: WithContact\n")
 		builder.WithContact(payload.FullName, payload.PhoneNumber)
 	} else if payload.Type == "location" {
+		fmt.Printf("Builder method: WithLocation\n")
 		builder.WithLocation(payload.Latitude, payload.Longitude, payload.Name, payload.Address)
 	} else if payload.Type == "location-button" {
+		fmt.Printf("Builder method: WithRequestLocationButton\n")
 		builder.WithRequestLocationButton(payload.Message, payload.Footer, payload.Title)
 	} else if payload.Type == "pix-button" {
+		fmt.Printf("Builder method: WithCopyButton (pix)\n")
 		builder.WithCopyButton(payload.Message, payload.Footer, payload.Title, payload.CopyText, payload.PixKey)
 	} else if payload.Type == "request-payment" {
+		fmt.Printf("Builder method: WithCopyButton (payment)\n")
 		text := fmt.Sprintf("%v\nValue: %v", payload.Message, payload.Amount)
 		builder.WithCopyButton(text, payload.Footer, payload.Title, "Copy PIX", payload.PixKey)
 	} else if payload.Type == "list" {
+		fmt.Printf("Builder method: WithList\n")
+		fmt.Printf("  Choices count: %d\n", len(payload.Choices))
 		builder.WithList(payload.Message, payload.Footer, payload.Title, payload.ListButton, payload.Choices)
+	} else if payload.Type == "poll" {
+		fmt.Printf("Builder method: WithPoll\n")
+		builder.WithPoll(payload.Question, payload.Options, payload.MaxAnswer)
 	} else if payload.Type == "carousel" {
+		fmt.Printf("Builder method: WithText (carousel placeholder)\n")
 		builder.WithText(payload.Message + "\n[Carousel Support Coming Soon]")
 	} else if payload.CopyCode != "" {
+		fmt.Printf("Builder method: WithCopyButton (copy)\n")
 		builder.WithCopyButton(payload.Message, payload.Footer, payload.Title, payload.CopyText, payload.CopyCode)
 	} else if payload.Type == "button" && len(payload.Buttons) > 0 {
+		fmt.Printf("Builder method: WithButtons\n")
+		fmt.Printf("  Buttons count: %d\n", len(payload.Buttons))
 		builder.WithButtons(payload.Message, payload.Footer, payload.Title, payload.Buttons)
 	} else {
+		fmt.Printf("Builder method: WithText (default)\n")
 		builder.WithText(payload.Message)
 	}
+	fmt.Printf("==========================================\n\n")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

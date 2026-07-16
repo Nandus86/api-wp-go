@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 )
 
 
@@ -33,6 +34,14 @@ type UazSendMessageRequest struct {
 	// Menu / List
 	ListButton string `json:"listButton,omitempty"`
     Choices    []string `json:"choices,omitempty"`
+
+	// Interactive / Buttons / Poll
+	Title     string   `json:"title,omitempty"`
+	Footer    string   `json:"footer,omitempty"`
+	Buttons   []string `json:"buttons,omitempty"`
+	Question  string   `json:"question,omitempty"`
+	Options   []string `json:"options,omitempty"`
+	MaxAnswer int      `json:"maxAnswer,omitempty"`
 
 	// payment / pix
 	Amount  float64 `json:"amount,omitempty"`
@@ -86,24 +95,28 @@ func (h *Handler) SendUazGeneric(w http.ResponseWriter, r *http.Request) {
 	// Use specific type if empty based on route later or let the worker determine
 	msgType := req.Type
 	
-	switch r.URL.Path {
-	case "/send/contact":
+	switch {
+	case strings.HasSuffix(r.URL.Path, "/send/contact"):
 		msgType = "contact"
-	case "/send/location":
+	case strings.HasSuffix(r.URL.Path, "/send/location"):
 		msgType = "location"
-	case "/message/presence":
+	case strings.HasSuffix(r.URL.Path, "/message/presence"):
 		msgType = "presence" 
-	case "/send/status":
+	case strings.HasSuffix(r.URL.Path, "/send/status"):
 		msgType = "status"
-	case "/send/menu":
+	case strings.HasSuffix(r.URL.Path, "/send/menu"):
 		if msgType == "" { msgType = "list" } // it could be "button" or "list" from payload
-	case "/send/carousel":
+	case strings.HasSuffix(r.URL.Path, "/send/poll"):
+		msgType = "poll"
+	case strings.HasSuffix(r.URL.Path, "/send/button"):
+		msgType = "button"
+	case strings.HasSuffix(r.URL.Path, "/send/carousel"):
 		msgType = "carousel"
-	case "/send/location-button":
+	case strings.HasSuffix(r.URL.Path, "/send/location-button"):
 		msgType = "location-button"
-	case "/send/request-payment":
+	case strings.HasSuffix(r.URL.Path, "/send/request-payment"):
 		msgType = "request-payment"
-	case "/send/pix-button":
+	case strings.HasSuffix(r.URL.Path, "/send/pix-button"):
 		msgType = "pix-button"
 	}
 
@@ -125,6 +138,12 @@ func (h *Handler) SendUazGeneric(w http.ResponseWriter, r *http.Request) {
 		"presence":     req.Presence,
 		"listButton":   req.ListButton,
 		"choices":      req.Choices,
+		"title":        req.Title,
+		"footer":       req.Footer,
+		"buttons":      req.Buttons,
+		"question":     req.Question,
+		"options":      req.Options,
+		"maxAnswer":    req.MaxAnswer,
 		"amount":       req.Amount,
 		"pixKey":       req.PixKey,
 		"pixType":      req.PixType,
@@ -282,5 +301,90 @@ func (h *Handler) SendUazMedia(w http.ResponseWriter, r *http.Request) {
 			"status":  "success",
 			"message": "Media sent successfully",
 		},
+	})
+}
+
+// DebugSendButton sends a hardcoded button message exactly as evolution-go does
+// This bypasses the normal builder to isolate whether the issue is in the builder or the library
+func (h *Handler) DebugSendButton(w http.ResponseWriter, r *http.Request) {
+	token := r.Header.Get("api_key")
+	if token == "" {
+		token = r.Header.Get("x-api-key")
+	}
+	if token == "" {
+		http.Error(w, "Unauthorized: missing api_key", http.StatusUnauthorized)
+		return
+	}
+
+	// Hardcoded payload matching evolution-go's SendButton exactly
+	payload := map[string]interface{}{
+		"device_id": token,
+		"number":    "554399284670", // Test number
+		"type":      "button",
+		"message":   "Test button message",
+		"title":     "Test Title",
+		"footer":    "Test Footer",
+		"buttons":   []string{"Option 1|id_1", "Option 2|id_2"},
+	}
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		http.Error(w, "Failed to encode message to queue", http.StatusInternalServerError)
+		return
+	}
+
+	err = h.rmqClient.Publish(r.Context(), "send_message_queue", payloadBytes)
+	if err != nil {
+		http.Error(w, "Failed to enqueue message", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  "success",
+		"message": "Debug button message queued - check logs for detailed protobuf dump",
+	})
+}
+
+// DebugSendList sends a hardcoded list message exactly as evolution-go does
+// This bypasses the normal builder to isolate whether the issue is in the builder or the library
+func (h *Handler) DebugSendList(w http.ResponseWriter, r *http.Request) {
+	token := r.Header.Get("api_key")
+	if token == "" {
+		token = r.Header.Get("x-api-key")
+	}
+	if token == "" {
+		http.Error(w, "Unauthorized: missing api_key", http.StatusUnauthorized)
+		return
+	}
+
+	// Hardcoded payload matching evolution-go's SendList exactly
+	payload := map[string]interface{}{
+		"device_id":  token,
+		"number":     "554399284670", // Test number
+		"type":       "list",
+		"message":    "Test list message",
+		"title":      "Test List Title",
+		"footer":     "Test Footer",
+		"listButton": "View Options",
+		"choices":    []string{"[Section 1]", "Option 1|id_1|Description 1", "Option 2|id_2|Description 2"},
+	}
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		http.Error(w, "Failed to encode message to queue", http.StatusInternalServerError)
+		return
+	}
+
+	err = h.rmqClient.Publish(r.Context(), "send_message_queue", payloadBytes)
+	if err != nil {
+		http.Error(w, "Failed to enqueue message", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  "success",
+		"message": "Debug list message queued - check logs for detailed protobuf dump",
 	})
 }

@@ -39,42 +39,35 @@ func (b *MessageBuilder) WithText(text string) *MessageBuilder {
 }
 
 func (b *MessageBuilder) WithButtons(text string, footer string, title string, buttons []string) *MessageBuilder {
-	var nfButtons []*waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton
 
-	for i, btn := range buttons {
-		parts := splitChoice(btn)
-		displayText := parts[0]
-		buttonID := generateID(i)
+
+	var replyButtons []*waE2E.ButtonsMessage_Button
+	for i, buttonText := range buttons {
+		parts := splitChoice(buttonText)
+		buttonName := parts[0]
+		buttonId := fmt.Sprintf("btn_%d", i)
 		if len(parts) > 1 {
-			buttonID = parts[1]
+			buttonId = parts[1]
 		}
-
-		paramsJSON := fmt.Sprintf(`{"display_text":"%s","id":"%s"}`, displayText, buttonID)
-		nfButtons = append(nfButtons, &waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton{
-			Name:             proto.String("quick_reply"),
-			ButtonParamsJSON: proto.String(paramsJSON),
+		replyButtons = append(replyButtons, &waE2E.ButtonsMessage_Button{
+			ButtonID: proto.String(buttonId),
+			ButtonText: &waE2E.ButtonsMessage_Button_ButtonText{
+				DisplayText: proto.String(buttonName),
+			},
+			Type: waE2E.ButtonsMessage_Button_RESPONSE.Enum(),
 		})
 	}
 
-	msgVersion := int32(1)
+	contentText := text
+	if title != "" {
+		contentText = "*" + title + "*\n\n" + text
+	}
 
-	interactiveMsg := &waE2E.InteractiveMessage{
-		Body: &waE2E.InteractiveMessage_Body{
-			Text: proto.String(text),
-		},
-		Footer: &waE2E.InteractiveMessage_Footer{
-			Text: proto.String(footer),
-		},
-		Header: &waE2E.InteractiveMessage_Header{
-			Title:              proto.String(title),
-			HasMediaAttachment: proto.Bool(false),
-		},
-		InteractiveMessage: &waE2E.InteractiveMessage_NativeFlowMessage_{
-			NativeFlowMessage: &waE2E.InteractiveMessage_NativeFlowMessage{
-				Buttons:        nfButtons,
-				MessageVersion: &msgVersion,
-			},
-		},
+	buttonsMsg := &waE2E.ButtonsMessage{
+		ContentText: proto.String(contentText),
+		FooterText:  proto.String(footer),
+		HeaderType:  waE2E.ButtonsMessage_EMPTY.Enum(),
+		Buttons:     replyButtons,
 	}
 
 	btnMsgSecret := make([]byte, 32)
@@ -83,13 +76,39 @@ func (b *MessageBuilder) WithButtons(text string, footer string, title string, b
 	b.msg = &waE2E.Message{
 		DocumentWithCaptionMessage: &waE2E.FutureProofMessage{
 			Message: &waE2E.Message{
-				InteractiveMessage: interactiveMsg,
+				ButtonsMessage: buttonsMsg,
 			},
 		},
 		MessageContextInfo: &waE2E.MessageContextInfo{
 			MessageSecret: btnMsgSecret,
 		},
 	}
+
+	b.extraNodes = []waBinary.Node{
+		{
+			Tag: "biz",
+			Content: []waBinary.Node{{
+				Tag: "interactive",
+				Attrs: waBinary.Attrs{
+					"type": "native_flow",
+					"v":    "1",
+				},
+				Content: []waBinary.Node{{
+					Tag: "native_flow",
+					Attrs: waBinary.Attrs{
+						"name": "quick_reply",
+					},
+				}},
+			}},
+		},
+	}
+	if !strings.Contains(b.jid.String(), "@g.us") {
+		b.extraNodes = append(b.extraNodes, waBinary.Node{
+			Tag:   "bot",
+			Attrs: waBinary.Attrs{"biz_bot": "1"},
+		})
+	}
+
 	return b
 }
 
@@ -129,8 +148,8 @@ func (b *MessageBuilder) WithCopyButton(text string, footer string, title string
 		},
 		InteractiveMessage: &waE2E.InteractiveMessage_NativeFlowMessage_{
 			NativeFlowMessage: &waE2E.InteractiveMessage_NativeFlowMessage{
-				Buttons:        nfButtons,
-				MessageVersion: &msgVersion,
+				Buttons:           nfButtons,
+				MessageVersion:    &msgVersion,
 				MessageParamsJSON: proto.String(`{"from":"api","templateId":"` + copyCode + `"}`),
 			},
 		},
@@ -148,6 +167,39 @@ func (b *MessageBuilder) WithCopyButton(text string, footer string, title string
 		MessageContextInfo: &waE2E.MessageContextInfo{
 			MessageSecret: btnMsgSecret,
 		},
+	}
+
+	b.extraNodes = []waBinary.Node{
+		{
+			Tag: "biz",
+			Content: []waBinary.Node{{
+				Tag: "interactive",
+				Attrs: waBinary.Attrs{
+					"type": "native_flow",
+					"v":    "1",
+				},
+				Content: []waBinary.Node{{
+					Tag: "native_flow",
+					Attrs: waBinary.Attrs{
+						"name": "mixed",
+					},
+				}},
+			}},
+		},
+	}
+	if !strings.Contains(b.jid.String(), "@g.us") {
+		b.extraNodes = append(b.extraNodes, waBinary.Node{
+			Tag:   "bot",
+			Attrs: waBinary.Attrs{"biz_bot": "1"},
+		})
+	}
+
+	return b
+}
+
+func (b *MessageBuilder) WithPoll(question string, options []string, maxAnswer int) *MessageBuilder {
+	if b.client != nil {
+		b.msg = b.client.BuildPollCreation(question, options, maxAnswer)
 	}
 	return b
 }
@@ -405,20 +457,43 @@ func (b *MessageBuilder) Send(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("client is nil")
 	}
 
-	fmt.Printf("\n\n====== OUTGOING MESSAGE BUILDER ======\nJID: %s\nProtobuf:\n%+v\n==========================================\n\n", b.jid.String(), b.msg)
+	// Debug: Log full message details before sending
+	fmt.Printf("\n\n====== OUTGOING MESSAGE BUILDER (DEBUG) ======\n")
+	fmt.Printf("JID: %s\n", b.jid.String())
+	fmt.Printf("Has MessageContextInfo: %v\n", b.msg.MessageContextInfo != nil)
+	if b.msg.MessageContextInfo != nil {
+		fmt.Printf("Has MessageSecret: %v (len=%d)\n", 
+			b.msg.MessageContextInfo.MessageSecret != nil,
+			len(b.msg.MessageContextInfo.MessageSecret))
+	}
+	fmt.Printf("Extra Nodes Count: %d\n", len(b.extraNodes))
+	if len(b.extraNodes) > 0 {
+		for i, node := range b.extraNodes {
+			fmt.Printf("Extra Node[%d]: Tag=%s, Attrs=%v, ContentLen=%d\n", 
+				i, node.Tag, node.Attrs, len(node.GetChildren()))
+		}
+	}
+	fmt.Printf("Protobuf:\n%+v\n", b.msg)
+	fmt.Printf("==========================================\n\n")
 
 	var err error
 
 	extra := whatsmeow.SendRequestExtra{}
 	if len(b.extraNodes) > 0 {
 		extra.AdditionalNodes = &b.extraNodes
+		fmt.Printf("DEBUG: Setting AdditionalNodes (%d nodes)\n", len(b.extraNodes))
+	} else {
+		fmt.Printf("DEBUG: No AdditionalNodes set\n")
 	}
 
 	for i := 0; i <= b.retry; i++ {
+		fmt.Printf("DEBUG: Attempt %d to send message\n", i+1)
 		resp, sendErr := b.client.SendMessage(ctx, b.jid, b.msg, extra)
 		if sendErr == nil {
+			fmt.Printf("DEBUG: Message sent successfully, ID=%s\n", resp.ID)
 			return resp.ID, nil
 		}
+		fmt.Printf("DEBUG: Send failed: %v\n", sendErr)
 		err = sendErr
 		time.Sleep(time.Duration(i) * time.Second)
 	}

@@ -94,6 +94,10 @@ func (h *Handler) Router() http.Handler {
 		apiRouter.Get("/logs", h.GetLogs)
 		apiRouter.Get("/stats", h.GetStats)
 
+		// Debug endpoints for testing buttons and lists
+		apiRouter.Post("/debug/send-button", h.DebugSendButton)
+		apiRouter.Post("/debug/send-list", h.DebugSendList)
+
 		// Basileapi compatible routes (Messages only)
 		apiRouter.Route("/send", func(r chi.Router) {
 			r.Post("/text", h.SendUazText)
@@ -102,6 +106,8 @@ func (h *Handler) Router() http.Handler {
 			r.Post("/location", h.SendUazGeneric)
 			r.Post("/status", h.SendUazGeneric)
 			r.Post("/menu", h.SendUazGeneric)
+			r.Post("/button", h.SendUazGeneric)
+			r.Post("/poll", h.SendUazGeneric)
 			r.Post("/carousel", h.SendUazGeneric)
 			r.Post("/location-button", h.SendUazGeneric)
 			r.Post("/request-payment", h.SendUazGeneric)
