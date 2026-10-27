@@ -6,7 +6,6 @@ import (
 	"strings"
 )
 
-
 // UazSendMessageRequest represents the payload for UazAPI message endpoints
 type UazSendMessageRequest struct {
 	Number string `json:"number"`
@@ -19,8 +18,8 @@ type UazSendMessageRequest struct {
 	Async    bool   `json:"async,omitempty"`
 
 	// Contact
-	FullName     string `json:"fullName,omitempty"`
-	PhoneNumber  string `json:"phoneNumber,omitempty"`
+	FullName    string `json:"fullName,omitempty"`
+	PhoneNumber string `json:"phoneNumber,omitempty"`
 
 	// Location
 	Address   string  `json:"address,omitempty"`
@@ -32,8 +31,8 @@ type UazSendMessageRequest struct {
 	Presence string `json:"presence,omitempty"`
 
 	// Menu / List
-	ListButton string `json:"listButton,omitempty"`
-    Choices    []string `json:"choices,omitempty"`
+	ListButton string   `json:"listButton,omitempty"`
+	Choices    []string `json:"choices,omitempty"`
 
 	// Interactive / Buttons / Poll
 	Title     string   `json:"title,omitempty"`
@@ -52,7 +51,7 @@ type UazSendMessageRequest struct {
 
 // SendUazGeneric handles all other UazAPI message types
 // @Summary Send UazAPI Message (Various Types)
-// @Description Sends different types of messages (contact, location, status, menu, carousel, payment, pix, presence) via UazAPI format. 
+// @Description Sends different types of messages (contact, location, status, menu, carousel, payment, pix, presence) via UazAPI format.
 // @Description To send presence, use `/message/presence` with `{ "number": "...", "presence": "composing" }`.
 // @Description For menus/lists, use `/send/menu` with `{ "number": "...", "listButton": "Ver", "choices": ["[Geral]", "Opção 1|op1"] }`.
 // @Tags uazapi-messages
@@ -74,15 +73,8 @@ type UazSendMessageRequest struct {
 // @Router /send/request-payment [post]
 // @Router /send/pix-button [post]
 func (h *Handler) SendUazGeneric(w http.ResponseWriter, r *http.Request) {
-	token := r.Header.Get("api_key")
-	if token == "" {
-		token = r.Header.Get("x-api-key")
-	}
-	if token == "" {
-		token = r.Header.Get("token") // fallback for legacy
-	}
-	if token == "" {
-		http.Error(w, "Unauthorized: missing api_key", http.StatusUnauthorized)
+	token, ok := h.instanceFor(w, r, "")
+	if !ok {
 		return
 	}
 
@@ -94,18 +86,20 @@ func (h *Handler) SendUazGeneric(w http.ResponseWriter, r *http.Request) {
 
 	// Use specific type if empty based on route later or let the worker determine
 	msgType := req.Type
-	
+
 	switch {
 	case strings.HasSuffix(r.URL.Path, "/send/contact"):
 		msgType = "contact"
 	case strings.HasSuffix(r.URL.Path, "/send/location"):
 		msgType = "location"
 	case strings.HasSuffix(r.URL.Path, "/message/presence"):
-		msgType = "presence" 
+		msgType = "presence"
 	case strings.HasSuffix(r.URL.Path, "/send/status"):
 		msgType = "status"
 	case strings.HasSuffix(r.URL.Path, "/send/menu"):
-		if msgType == "" { msgType = "list" } // it could be "button" or "list" from payload
+		if msgType == "" {
+			msgType = "list"
+		} // it could be "button" or "list" from payload
 	case strings.HasSuffix(r.URL.Path, "/send/poll"):
 		msgType = "poll"
 	case strings.HasSuffix(r.URL.Path, "/send/button"):
@@ -122,32 +116,32 @@ func (h *Handler) SendUazGeneric(w http.ResponseWriter, r *http.Request) {
 
 	// Create a generic payload mapping all fields
 	payload := map[string]interface{}{
-		"device_id":    token,
-		"number":       req.Number,
-		"text":         req.Text,
-		"type":         msgType,
-		"caption":      req.Caption,
-		"file":         req.File,
-		"filename":     req.Filename,
-		"fullName":     req.FullName,
-		"phoneNumber":  req.PhoneNumber,
-		"address":      req.Address,
-		"name":         req.Name,
-		"latitude":     req.Latitude,
-		"longitude":    req.Longitude,
-		"presence":     req.Presence,
-		"listButton":   req.ListButton,
-		"choices":      req.Choices,
-		"title":        req.Title,
-		"footer":       req.Footer,
-		"buttons":      req.Buttons,
-		"question":     req.Question,
-		"options":      req.Options,
-		"maxAnswer":    req.MaxAnswer,
-		"amount":       req.Amount,
-		"pixKey":       req.PixKey,
-		"pixType":      req.PixType,
-		"pixName":      req.PixName,
+		"device_id":   token,
+		"number":      req.Number,
+		"text":        req.Text,
+		"type":        msgType,
+		"caption":     req.Caption,
+		"file":        req.File,
+		"filename":    req.Filename,
+		"fullName":    req.FullName,
+		"phoneNumber": req.PhoneNumber,
+		"address":     req.Address,
+		"name":        req.Name,
+		"latitude":    req.Latitude,
+		"longitude":   req.Longitude,
+		"presence":    req.Presence,
+		"listButton":  req.ListButton,
+		"choices":     req.Choices,
+		"title":       req.Title,
+		"footer":      req.Footer,
+		"buttons":     req.Buttons,
+		"question":    req.Question,
+		"options":     req.Options,
+		"maxAnswer":   req.MaxAnswer,
+		"amount":      req.Amount,
+		"pixKey":      req.PixKey,
+		"pixType":     req.PixType,
+		"pixName":     req.PixName,
 	}
 
 	payloadBytes, err := json.Marshal(payload)
@@ -172,10 +166,9 @@ func (h *Handler) SendUazGeneric(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-
 // SendUazText sends a text message via UazAPI format
 // @Summary Send UazAPI Text Message
-// @Description Sends a simple text message in the UazAPI format. 
+// @Description Sends a simple text message in the UazAPI format.
 // @Tags uazapi-messages
 // @Accept json
 // @Produce json
@@ -187,15 +180,8 @@ func (h *Handler) SendUazGeneric(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {string} string "Failed to enqueue message"
 // @Router /send/text [post]
 func (h *Handler) SendUazText(w http.ResponseWriter, r *http.Request) {
-	token := r.Header.Get("api_key")
-	if token == "" {
-		token = r.Header.Get("x-api-key")
-	}
-	if token == "" {
-		token = r.Header.Get("token") // fallback for legacy
-	}
-	if token == "" {
-		http.Error(w, "Unauthorized: missing api_key", http.StatusUnauthorized)
+	token, ok := h.instanceFor(w, r, "")
+	if !ok {
 		return
 	}
 
@@ -249,15 +235,8 @@ func (h *Handler) SendUazText(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {string} string "Failed to enqueue message"
 // @Router /send/media [post]
 func (h *Handler) SendUazMedia(w http.ResponseWriter, r *http.Request) {
-	token := r.Header.Get("api_key")
-	if token == "" {
-		token = r.Header.Get("x-api-key")
-	}
-	if token == "" {
-		token = r.Header.Get("token") // fallback for legacy
-	}
-	if token == "" {
-		http.Error(w, "Unauthorized: missing api_key", http.StatusUnauthorized)
+	token, ok := h.instanceFor(w, r, "")
+	if !ok {
 		return
 	}
 
@@ -307,12 +286,8 @@ func (h *Handler) SendUazMedia(w http.ResponseWriter, r *http.Request) {
 // DebugSendButton sends a hardcoded button message exactly as evolution-go does
 // This bypasses the normal builder to isolate whether the issue is in the builder or the library
 func (h *Handler) DebugSendButton(w http.ResponseWriter, r *http.Request) {
-	token := r.Header.Get("api_key")
-	if token == "" {
-		token = r.Header.Get("x-api-key")
-	}
-	if token == "" {
-		http.Error(w, "Unauthorized: missing api_key", http.StatusUnauthorized)
+	token, ok := h.instanceFor(w, r, "")
+	if !ok {
 		return
 	}
 
@@ -349,12 +324,8 @@ func (h *Handler) DebugSendButton(w http.ResponseWriter, r *http.Request) {
 // DebugSendList sends a hardcoded list message exactly as evolution-go does
 // This bypasses the normal builder to isolate whether the issue is in the builder or the library
 func (h *Handler) DebugSendList(w http.ResponseWriter, r *http.Request) {
-	token := r.Header.Get("api_key")
-	if token == "" {
-		token = r.Header.Get("x-api-key")
-	}
-	if token == "" {
-		http.Error(w, "Unauthorized: missing api_key", http.StatusUnauthorized)
+	token, ok := h.instanceFor(w, r, "")
+	if !ok {
 		return
 	}
 

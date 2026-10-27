@@ -11,6 +11,8 @@ import (
 
 	_ "github.com/lib/pq"
 	"github.com/user/whatsmeow-basileia/internal/api"
+	"github.com/user/whatsmeow-basileia/internal/audit"
+	"github.com/user/whatsmeow-basileia/internal/auth"
 	"github.com/user/whatsmeow-basileia/internal/infrastructure/database"
 	"github.com/user/whatsmeow-basileia/internal/infrastructure/rabbitmq"
 	redisinfra "github.com/user/whatsmeow-basileia/internal/infrastructure/redis"
@@ -121,15 +123,45 @@ func main() {
 	whWorker := webhook.NewWorker(rmqClient, logger.Log, cfg.WebhookURL)
 	whWorker.Start()
 
-	// 6. HTTP API
-	handler := api.NewHandler(api.Deps{
+	// 6. Authentication + audit
+	authService := auth.NewService(db, cfg.AdminAPIKey, func(token string) (string, string, bool) {
+		inst, ok := manager.InstanceByAPIKey(token)
+		if !ok {
+			return "", "", false
+		}
+		return inst.ID, inst.Name, true
+	})
+	if cfg.AuthRequired {
+		key, path, err := authService.Bootstrap(ctx, cfg.DataDir)
+		if err != nil {
+			logger.Error("Failed to bootstrap admin API key", zap.Error(err))
+			os.Exit(1)
+		}
+		if key != "" {
+			// Printed once, like OpenWA: later boots only find the hash in the database.
+			logger.Log.Warn("Generated the first admin API key. Store it now, it will not be shown again.",
+				zap.String("admin_api_key", key), zap.String("saved_to", path))
+		}
+	} else {
+		logger.Warn("AUTH_REQUIRED=false: the API is open to anyone who can reach it (legacy mode)")
+	}
+	auditStore := audit.NewStore(db)
+
+	// 7. HTTP API
+	handler, err := api.NewHandler(api.Deps{
 		Manager:  manager,
 		RabbitMQ: rmqClient,
 		DB:       db,
 		Redis:    redisClient,
 		Storage:  objectStore,
 		Config:   cfg,
+		Auth:     authService,
+		Audit:    auditStore,
 	})
+	if err != nil {
+		logger.Error("Invalid HTTP configuration", zap.Error(err))
+		os.Exit(1)
+	}
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.HTTPPort,
