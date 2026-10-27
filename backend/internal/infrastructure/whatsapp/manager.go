@@ -344,15 +344,26 @@ func (m *MultiClientManager) GetQR(ctx context.Context, deviceID string) (<-chan
 		return nil, ErrAlreadyPaired
 	}
 
+	// A pairing attempt is already running (the dialog was reopened or the stream dropped).
+	// Follow its codes instead of restarting WhatsApp's login: restarting invalidates the
+	// code the user is about to scan.
+	if _, running := m.Pairing(deviceID); running {
+		return m.followPairing(ctx, deviceID), nil
+	}
+
 	// A QR channel can only be opened on a disconnected client, so restart any login
-	// attempt already in progress (e.g. the QR dialog was reopened).
+	// attempt that is stale (no valid code left).
 	if client.IsConnected() {
 		client.Disconnect()
 	}
 
-	// Get the channel from whatsmeow which gives us QR events
-	qrChan, err := client.GetQRChannel(ctx)
+	// The pairing lives as long as WhatsApp's QR window (about 3 minutes), not as long as
+	// this HTTP stream: whatsmeow disconnects when the channel context ends, so tying it to
+	// the request would kill the pairing every time the browser reconnects.
+	qrCtx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	qrChan, err := client.GetQRChannel(qrCtx)
 	if err != nil {
+		cancel()
 		return nil, fmt.Errorf("failed to open QR channel: %w", err)
 	}
 	qrCodeChan := make(chan string)
@@ -360,35 +371,59 @@ func (m *MultiClientManager) GetQR(ctx context.Context, deviceID string) (<-chan
 	go client.Connect()
 
 	go func() {
+		defer cancel()
 		defer close(qrCodeChan)
 		logger.Debug("Started QR stream", zap.String("instance", deviceID))
 
-		for {
+		// Runs until whatsmeow closes the channel, even after the viewer left, so the
+		// latest code stays recorded for the next viewer.
+		for evt := range qrChan {
+			if evt.Event != "code" {
+				logger.Debug("Received non-code QR event", zap.String("event", evt.Event), zap.String("instance", deviceID))
+				continue
+			}
+			m.setPairing(deviceID, PairingState{QRCode: evt.Code, ExpiresAt: time.Now().Add(evt.Timeout)})
 			select {
+			case qrCodeChan <- evt.Code:
 			case <-ctx.Done():
-				// Keep draining so whatsmeow never blocks on a full channel after we leave.
-				go drainQR(qrChan)
-				return
-			case evt, ok := <-qrChan:
-				if !ok {
-					return
-				}
-				if evt.Event == "code" {
-					m.setPairing(deviceID, PairingState{QRCode: evt.Code, ExpiresAt: time.Now().Add(evt.Timeout)})
-					select {
-					case qrCodeChan <- evt.Code:
-					case <-ctx.Done():
-						go drainQR(qrChan)
-						return
-					}
-				} else {
-					logger.Debug("Received non-code QR event", zap.String("event", evt.Event), zap.String("instance", deviceID))
-				}
+				// Viewer gone: keep recording codes, nobody is reading this one.
 			}
 		}
 	}()
 
 	return qrCodeChan, nil
+}
+
+// followPairing streams the codes of a pairing attempt that is already running.
+// It ends when the attempt stops (paired, expired) or ctx is done.
+func (m *MultiClientManager) followPairing(ctx context.Context, id string) <-chan string {
+	out := make(chan string)
+	go func() {
+		defer close(out)
+		var last string
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			st, ok := m.Pairing(id)
+			if !ok {
+				return
+			}
+			if st.QRCode != "" && st.QRCode != last {
+				last = st.QRCode
+				select {
+				case out <- last:
+				case <-ctx.Done():
+					return
+				}
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	return out
 }
 
 func drainQR(ch <-chan whatsmeow.QRChannelItem) {

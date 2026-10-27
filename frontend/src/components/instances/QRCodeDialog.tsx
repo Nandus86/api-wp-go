@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import QRCode from 'react-qr-code'
 import { X, Loader2, CheckCircle2 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -17,6 +17,14 @@ export function QRCodeDialog({ isOpen, instanceId, instanceName, onClose, onConn
     const [status, setStatus] = useState<'connecting' | 'waiting_scan' | 'connected' | 'error'>('connecting')
     const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
+    // Keep the latest callback in a ref: the effect below must only restart when the
+    // dialog opens or the instance changes. A new inline callback on every parent render
+    // used to close and reopen the stream (and restart pairing) every few seconds.
+    const onConnectedRef = useRef(onConnected)
+    useEffect(() => {
+        onConnectedRef.current = onConnected
+    }, [onConnected])
+
     useEffect(() => {
         if (!isOpen || !instanceId) {
             setQrCode(null)
@@ -30,6 +38,7 @@ export function QRCodeDialog({ isOpen, instanceId, instanceName, onClose, onConn
 
         let retryCount = 0
         const maxRetries = 5
+        let connected = false
 
         const connectSSE = () => {
             if (retryCount >= maxRetries) {
@@ -61,7 +70,7 @@ export function QRCodeDialog({ isOpen, instanceId, instanceName, onClose, onConn
                 retryCount++
                 console.log(`Retrying SSE connection (${retryCount}/${maxRetries})...`)
                 setTimeout(() => {
-                    if (isOpen && status !== 'connected') {
+                    if (!connected) {
                         connectSSE()
                     }
                 }, 2000)
@@ -73,6 +82,7 @@ export function QRCodeDialog({ isOpen, instanceId, instanceName, onClose, onConn
                 const data = await fetchDeviceStatus(instanceId)
                 {
                     if (data.status === 'connected') {
+                        connected = true
                         setStatus('connected')
                         toast.success('Device paired successfully!')
                         if (eventSource) {
@@ -82,7 +92,7 @@ export function QRCodeDialog({ isOpen, instanceId, instanceName, onClose, onConn
                             window.clearInterval(pollInterval)
                         }
                         setTimeout(() => {
-                            onConnected()
+                            onConnectedRef.current()
                         }, 1500)
                     }
                 }
@@ -98,7 +108,7 @@ export function QRCodeDialog({ isOpen, instanceId, instanceName, onClose, onConn
             if (eventSource) eventSource.close()
             if (pollInterval) window.clearInterval(pollInterval)
         }
-    }, [isOpen, instanceId, onConnected])
+    }, [isOpen, instanceId])
 
     if (!isOpen) return null
 
