@@ -4,27 +4,60 @@ services:
     container_name: whatsmeow-app
     ports:
       - "8080:8080"
+    env_file:
+      - path: .env
+        required: false
     environment:
       - HTTP_PORT=8080
+      - DATA_DIR=/app/data
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - WA_LOG_LEVEL=${WA_LOG_LEVEL:-INFO}
       - DB_DIALECT=postgres
-      - DB_ADDRESS=postgres://whatsmeow:securepassword@postgres:5432/whatsmeow?sslmode=disable
+      - DB_ADDRESS=postgres://whatsmeow:${POSTGRES_PASSWORD:-securepassword}@postgres:5432/whatsmeow?sslmode=disable
       - REDIS_URL=redis:6379
-      - RABBITMQ_URL=amqp://whatsmeow:securepassword@rabbitmq:5672/
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - RABBITMQ_URL=amqp://whatsmeow:${RABBITMQ_PASSWORD:-securepassword}@rabbitmq:5672/
       - MINIO_ENDPOINT=minio:9000
-      - MINIO_ACCESS_KEY=whatsmeowAdmin
-      - MINIO_SECRET_KEY=securepassword
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-whatsmeowAdmin}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-securepassword}
       - MINIO_USE_SSL=false
-      - WEBHOOK_URL= # Desativado até configurar o n8n. Ex: http://host.docker.internal:5678/webhook/whatsmeow
+      - MINIO_BUCKET=${MINIO_BUCKET:-whatsmeow-media}
+      # Public address used in presigned media links (leave empty to use the internal endpoint).
+      - MINIO_PUBLIC_URL=${MINIO_PUBLIC_URL:-}
+      # Authentication: set ADMIN_API_KEY (>= 16 chars). If empty, one is generated on first
+      # boot and written to /app/data/.api-key. AUTH_REQUIRED=false restores the old open API.
+      - AUTH_REQUIRED=${AUTH_REQUIRED:-true}
+      - ADMIN_API_KEY=${ADMIN_API_KEY:-}
+      - CORS_ORIGINS=${CORS_ORIGINS:-*}
+      - RATE_LIMIT_PER_MINUTE=${RATE_LIMIT_PER_MINUTE:-600}
+      # Global fallback webhook (used when an instance has no webhook_url).
+      - WEBHOOK_URL=${WEBHOOK_URL:-}
+      # HMAC secret used to sign webhook deliveries (X-Webhook-Signature).
+      - WEBHOOK_SECRET=${WEBHOOK_SECRET:-}
+      - WEBHOOK_MAX_ATTEMPTS=${WEBHOOK_MAX_ATTEMPTS:-8}
+      - MEDIA_ARCHIVE_ENABLED=${MEDIA_ARCHIVE_ENABLED:-false}
+      - MESSAGE_RETENTION_DAYS=${MESSAGE_RETENTION_DAYS:-0}
+      - SEND_PACING_ENABLED=${SEND_PACING_ENABLED:-false}
+      - SIMULATE_TYPING=${SIMULATE_TYPING:-false}
+    volumes:
+      - app_data:/app/data
     depends_on:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
       rabbitmq:
         condition: service_healthy
       minio:
         condition: service_healthy
+    healthcheck:
+      test: [ "CMD", "wget", "-qO-", "http://127.0.0.1:8080/health" ]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
     restart: unless-stopped
+    stop_grace_period: 30s
     networks:
       - whatsmeow-net
   frontend:
@@ -42,10 +75,16 @@ services:
   redis:
     image: redis:7-alpine
     container_name: whatsmeow-redis
+    command: [ "redis-server", "--appendonly", "yes" ]
     ports:
       - "16379:6379"
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
     networks:
       - whatsmeow-net
@@ -55,7 +94,7 @@ services:
     container_name: whatsmeow-rabbitmq
     environment:
       - RABBITMQ_DEFAULT_USER=whatsmeow
-      - RABBITMQ_DEFAULT_PASS=securepassword
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASSWORD:-securepassword}
     ports:
       - "5675:5672" # Mensageria AMQP
       - "15675:15672" # Painel Management
@@ -74,8 +113,8 @@ services:
     image: minio/minio:latest
     container_name: whatsmeow-minio
     environment:
-      - MINIO_ROOT_USER=whatsmeowAdmin
-      - MINIO_ROOT_PASSWORD=securepassword
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-whatsmeowAdmin}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-securepassword}
     command: server /data --console-address ":9001"
     ports:
       - "19000:9000" # API S3
@@ -95,7 +134,7 @@ services:
     container_name: whatsmeow-postgres
     environment:
       - POSTGRES_USER=whatsmeow
-      - POSTGRES_PASSWORD=securepassword
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-securepassword}
       - POSTGRES_DB=whatsmeow
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -115,9 +154,8 @@ networks:
     driver: bridge
 
 volumes:
+  app_data:
   postgres_data:
   redis_data:
   rabbitmq_data:
   minio_data:
-
-

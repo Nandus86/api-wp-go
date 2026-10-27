@@ -3,966 +3,706 @@ package whatsapp
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 
-	//"github.com/user/whatsmeow-basileia/pkg/logger"
+	"github.com/user/whatsmeow-basileia/internal/infrastructure/rabbitmq"
+	"github.com/user/whatsmeow-basileia/pkg/logger"
 	"go.mau.fi/whatsmeow"
-	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
-	"go.mau.fi/whatsmeow/types/events"
-    waLog "go.mau.fi/whatsmeow/util/log"
-    _ "github.com/lib/pq"
-    "github.com/user/whatsmeow-basileia/internal/infrastructure/rabbitmq"
-    "encoding/json"
+	waLog "go.mau.fi/whatsmeow/util/log"
+	"go.uber.org/zap"
 )
+
+var (
+	ErrClientNotFound = errors.New("client not found")
+	ErrNotLoggedIn    = errors.New("instance is not logged in")
+	ErrAlreadyPaired  = errors.New("already logged in")
+)
+
+type Options struct {
+	DB         *sql.DB
+	Dialect    string
+	WALogLevel string
+	Debug      bool
+}
 
 type MultiClientManager struct {
 	container     *sqlstore.Container
 	clients       map[string]*whatsmeow.Client
-	apiKeys       map[string]string // Maps apiKey -> deviceID
+	apiKeys       map[string]string            // Maps apiKey -> deviceID
 	clientIDs     map[*whatsmeow.Client]string // Maps client -> deviceID
+	instances     map[string]*Instance         // In-memory cache of instance metadata (by ID)
 	mu            sync.RWMutex
 	dispatcher    *EventDispatcher
 	instanceStore *InstanceStore
 	rmqClient     *rabbitmq.Client
+	hooks         Hooks
+	waLogLevel    string
+	debug         bool
 }
 
-func NewMultiClientManager(dbDialect, dbAddress string, dispatcher *EventDispatcher, rmqClient *rabbitmq.Client) (*MultiClientManager, error) {
-    dbLog := waLog.Stdout("Database", "DEBUG", true)
-	container, err := sqlstore.New(context.Background(), dbDialect, dbAddress, dbLog)
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to database: %w", err)
+func NewMultiClientManager(opts Options, dispatcher *EventDispatcher, rmqClient *rabbitmq.Client) (*MultiClientManager, error) {
+	if opts.WALogLevel == "" {
+		opts.WALogLevel = "INFO"
 	}
-
-    instanceStore, err := NewInstanceStore(dbDialect, dbAddress)
-    if err != nil {
-        return nil, fmt.Errorf("failed to initialize instance store: %w", err)
-    }
+	container := sqlstore.NewWithDB(opts.DB, opts.Dialect, waLog.Stdout("Database", opts.WALogLevel, true))
+	if err := container.Upgrade(context.Background()); err != nil {
+		return nil, fmt.Errorf("failed to upgrade whatsmeow store: %w", err)
+	}
 
 	manager := &MultiClientManager{
 		container:     container,
 		clients:       make(map[string]*whatsmeow.Client),
 		apiKeys:       make(map[string]string),
 		clientIDs:     make(map[*whatsmeow.Client]string),
+		instances:     make(map[string]*Instance),
 		dispatcher:    dispatcher,
-		instanceStore: instanceStore,
+		instanceStore: NewInstanceStore(opts.DB),
 		rmqClient:     rmqClient,
+		waLogLevel:    opts.WALogLevel,
+		debug:         opts.Debug,
 	}
-
-    // Load existing instances
-    instances, err := instanceStore.GetAllInstances()
-    if err != nil {
-        return nil, fmt.Errorf("failed to get existing instances: %w", err)
-    }
-
-    // Initialize clients for paired instances
-    for _, instance := range instances {
-        if instance.APIKey != "" {
-            manager.apiKeys[instance.APIKey] = instance.ID
-        }
-
-        if instance.JID != "" {
-            jid, _ := types.ParseJID(instance.JID)
-            device, err := container.GetDevice(context.Background(), jid)
-            if err == nil && device != nil {
-                client := whatsmeow.NewClient(device, waLog.Stdout("Client", "DEBUG", true))
-                if instance.ProxyURI != "" {
-                    err := client.SetProxyAddress(instance.ProxyURI)
-                    if err != nil {
-                        waLog.Stdout("Manager", "ERROR", true).Infof("Failed to set proxy for device %s: %v", instance.ID, err)
-                    }
-                }
-                
-                manager.clients[instance.ID] = client
-                manager.clientIDs[client] = instance.ID
-                
-                // Wrap handleEvent to pass the deviceID dynamically
-                client.AddEventHandler(func(evt interface{}) {
-                    manager.mu.RLock()
-                    currentID := manager.clientIDs[client]
-                    manager.mu.RUnlock()
-                    manager.handleEvent(currentID, evt)
-                })
-                go client.Connect()
-            }
-        }
-    }
-
 	return manager, nil
 }
 
-func (m *MultiClientManager) handleEvent(deviceID string, evt interface{}) {
-	webhookUrl := ""
-	apiKey := ""
-	instanceName := deviceID
-	inst, err := m.instanceStore.GetInstanceByID(deviceID)
-	if err == nil && inst != nil {
-		webhookUrl = inst.WebhookURL
-		apiKey = inst.APIKey
-		instanceName = inst.Name
-	}
-
-	switch v := evt.(type) {
-	case *events.Message:
-		// Record incoming message stat
-		if !v.Info.IsFromMe {
-			m.instanceStore.IncrementMessageStat(deviceID, "in")
-		} else {
-			m.instanceStore.IncrementMessageStat(deviceID, "out")
-		}
-
-		// Sniff incoming messages to capture the exact payload Basileapi uses
-		if v.Message != nil && (v.Message.GetInteractiveMessage() != nil || v.Message.GetViewOnceMessage() != nil || v.Message.GetViewOnceMessageV2() != nil || v.Message.GetViewOnceMessageV2Extension() != nil || v.Message.GetTemplateMessage() != nil || v.Message.GetButtonsMessage() != nil || v.Message.GetListMessage() != nil) {
-			waLog.Stdout("Sniffer", "INFO", true).Infof("\n\n====== INTERACTIVE MESSAGE SNIFFED ======\nJID: %s\nDeviceID: %d\nProtobuf:\n%+v\n==========================================\n\n", v.Info.Sender.String(), v.Info.Sender.Device, v.Message)
-		}
-
-		// Webhook forwarding
-		if m.rmqClient != nil {
-			msgType, content, _, _, _ := parseMessageContent(v.Message)
-
-			var verifiedName string
-			if v.Info.VerifiedName != nil && v.Info.VerifiedName.Details != nil {
-				verifiedName = v.Info.VerifiedName.Details.GetVerifiedName()
-			}
-
-			senderJID := m.resolveLID(deviceID, v.Info.Sender)
-			chatJID := m.resolveLID(deviceID, v.Info.Chat)
-
-			var senderLid string
-			if v.Info.Sender.Server == "lid" {
-				senderLid = v.Info.Sender.ToNonAD().String()
-			}
-			var chatLid string
-			if v.Info.Chat.Server == "lid" {
-				chatLid = v.Info.Chat.ToNonAD().String()
-			}
-
-			// Extract text content reliably
-			textContent := ""
-			if val, ok := content["text"].(string); ok {
-				textContent = val
-			} else if val, ok := content["conversation"].(string); ok {
-				textContent = val
-			}
-
-			// Map message types to BasileAPI types
-			bapiType := "text"
-			buttonOrListid := ""
-
-			if msgType == "imageMessage" {
-				bapiType = "image"
-			} else if msgType == "videoMessage" {
-				bapiType = "video"
-			} else if msgType == "audioMessage" {
-				bapiType = "audio"
-			} else if msgType == "documentMessage" {
-				bapiType = "document"
-			} else if msgType == "contactMessage" {
-				bapiType = "contact"
-			} else if msgType == "locationMessage" {
-				bapiType = "location"
-			} else if resp := v.Message.GetListResponseMessage(); resp != nil {
-				bapiType = "list_response"
-				buttonOrListid = resp.GetSingleSelectReply().GetSelectedRowID()
-				textContent = resp.GetTitle()
-			} else if resp := v.Message.GetTemplateButtonReplyMessage(); resp != nil {
-				bapiType = "template_button_reply"
-				buttonOrListid = resp.GetSelectedID()
-				textContent = resp.GetSelectedDisplayText()
-			} else if resp := v.Message.GetInteractiveResponseMessage(); resp != nil {
-				if nf := resp.GetNativeFlowResponseMessage(); nf != nil {
-					bapiType = "native_flow_response"
-					
-					var params map[string]interface{}
-					if err := json.Unmarshal([]byte(nf.GetParamsJSON()), &params); err == nil {
-						if id, ok := params["id"].(string); ok {
-							buttonOrListid = id
-						}
-					}
-					textContent = nf.GetName()
-				}
-			}
-
-			bapiPayload := map[string]interface{}{
-				"BaseUrl":   "https://api.basileia.com",
-				"EventType": "messages",
-				"chat": map[string]interface{}{
-					"chatbot_agentResetMemoryAt": 0,
-					"chatbot_disableUntil":       0,
-					"chatbot_lastTriggerAt":      0,
-					"chatbot_lastTrigger_id":     "",
-					"id":                         fmt.Sprintf("r%x", time.Now().UnixNano()),
-					"image":                      "",
-					"imagePreview":               "",
-					"lead_assignedAttendant_id":  "",
-					"lead_email":                 "",
-					"lead_field01":               "",
-					"lead_field02":               "",
-					"lead_field03":               "",
-					"lead_field04":               "",
-					"lead_field05":               "",
-					"lead_field06":               "",
-					"lead_field07":               "",
-					"lead_field08":               "",
-					"lead_field09":               "",
-					"lead_field10":               "",
-					"lead_field11":               "",
-					"lead_field12":               "",
-					"lead_field13":               "",
-					"lead_field14":               "",
-					"lead_field15":               "",
-					"lead_field16":               "",
-					"lead_field17":               "",
-					"lead_field18":               "",
-					"lead_field19":               "",
-					"lead_field20":               "",
-					"lead_fullName":              v.Info.PushName,
-					"lead_isTicketOpen":          false,
-					"lead_kanbanOrder":           0,
-					"lead_name":                  v.Info.PushName,
-					"lead_notes":                 "",
-					"lead_personalid":            "",
-					"lead_status":                "",
-					"lead_tags":                  []string{},
-					"name":                       v.Info.PushName,
-					"owner":                      senderJID.User,
-					"phone":                      "+" + senderJID.User,
-					"wa_archived":                false,
-					"wa_chatid":                  chatJID.String(),
-					"wa_chatlid":                 chatLid,
-					"wa_contactName":             v.Info.PushName,
-					"wa_ephemeralExpiration":     0,
-					"wa_fastid":                  senderJID.User + ":" + chatJID.User,
-					"wa_isBlocked":               false,
-					"wa_isGroup":                 v.Info.IsGroup,
-					"wa_isGroup_admin":           false,
-					"wa_isGroup_announce":        false,
-					"wa_isGroup_community":       false,
-					"wa_isGroup_member":          false,
-					"wa_isPinned":                false,
-					"wa_label":                   []string{},
-					"wa_lastMessageSender":       senderLid,
-					"wa_lastMessageTextVote":     textContent,
-					"wa_lastMessageType":         "Conversation",
-					"wa_lastMsgTimestamp":        v.Info.Timestamp.UnixMilli(),
-					"wa_muteEndTime":             0,
-					"wa_name":                    verifiedName,
-					"wa_notes":                   "",
-					"wa_unreadCount":             1,
-				},
-				"chatSource":   "updated",
-				"instanceName": instanceName,
-				"message": map[string]interface{}{
-					"buttonOrListid":   buttonOrListid,
-					"chatid":           chatJID.String(),
-					"chatlid":          chatLid,
-					"content":          textContent,
-					"convertOptions":   "",
-					"edited":           "",
-					"fromMe":           v.Info.IsFromMe,
-					"groupName":        "",
-					"id":               senderJID.User + ":" + v.Info.ID,
-					"isGroup":          v.Info.IsGroup,
-					"mediaType":        v.Info.MediaType,
-					"messageTimestamp": v.Info.Timestamp.UnixMilli(),
-					"messageType":      "Conversation",
-					"messageid":        v.Info.ID,
-					"owner":            senderJID.User,
-					"pinned":           false,
-					"quoted":           "",
-					"reaction":         "",
-					"sender":           senderLid,
-					"senderName":       v.Info.PushName,
-					"sender_lid":       senderLid,
-					"sender_pn":        senderJID.String(),
-					"source":           "web",
-					"status":           "",
-					"text":             textContent,
-					"track_id":         "",
-					"track_source":     "",
-					"type":             bapiType,
-					"vote":             "",
-					"wasSentByApi":     false,
-				},
-				"owner": senderJID.User,
-				"token": apiKey,
-			}
-
-			envelope := map[string]interface{}{
-				"webhook_url": webhookUrl,
-				"payload":     bapiPayload,
-			}
-
-			body, err := json.Marshal(envelope)
-			if err == nil {
-				m.rmqClient.Publish(context.Background(), "webhook_events_queue", body)
-			}
-		}
-
-	case *events.Receipt:
-		if m.rmqClient != nil {
-			var msgIDs []string
-			for _, id := range v.MessageIDs {
-				msgIDs = append(msgIDs, string(id))
-			}
-
-			chatJID := m.resolveLID(deviceID, v.Chat)
-			senderJID := m.resolveLID(deviceID, v.Sender)
-
-			var senderLid string
-			if v.Sender.Server == "lid" {
-				senderLid = v.Sender.ToNonAD().String()
-			}
-			var chatLid string
-			if v.Chat.Server == "lid" {
-				chatLid = v.Chat.ToNonAD().String()
-			}
-
-			payload := map[string]interface{}{
-				"event":       "receipts.update",
-				"instance_id": deviceID,
-				"api_key":     apiKey,
-				"webhook_url": webhookUrl,
-				"data": map[string]interface{}{
-					"chatId":     chatJID.String(),
-					"sender":     senderJID.String(),
-					"senderLid":  senderLid,
-					"chatLid":    chatLid,
-					"messageIds": msgIDs,
-					"type":       string(v.Type),
-					"timestamp":  v.Timestamp.Unix(),
-				},
-			}
-
-			body, err := json.Marshal(payload)
-			if err == nil {
-				m.rmqClient.Publish(context.Background(), "webhook_events_queue", body)
-			}
-		}
-
-	case *events.ChatPresence:
-		if m.rmqClient != nil {
-			chatJID := m.resolveLID(deviceID, v.Chat)
-			senderJID := m.resolveLID(deviceID, v.Sender)
-
-			var senderLid string
-			if v.Sender.Server == "lid" {
-				senderLid = v.Sender.ToNonAD().String()
-			}
-			var chatLid string
-			if v.Chat.Server == "lid" {
-				chatLid = v.Chat.ToNonAD().String()
-			}
-
-			payload := map[string]interface{}{
-				"event":       "presence.update",
-				"instance_id": deviceID,
-				"api_key":     apiKey,
-				"webhook_url": webhookUrl,
-				"data": map[string]interface{}{
-					"chatId":    chatJID.String(),
-					"sender":    senderJID.String(),
-					"senderLid": senderLid,
-					"chatLid":   chatLid,
-					"state":     string(v.State),
-					"media":     string(v.Media),
-				},
-			}
-
-			body, err := json.Marshal(payload)
-			if err == nil {
-				m.rmqClient.Publish(context.Background(), "webhook_events_queue", body)
-			}
-		}
-
-	case *events.Presence:
-		if m.rmqClient != nil {
-			fromJID := m.resolveLID(deviceID, v.From)
-
-			var senderLid string
-			if v.From.Server == "lid" {
-				senderLid = v.From.ToNonAD().String()
-			}
-
-			payload := map[string]interface{}{
-				"event":       "presence.update",
-				"instance_id": deviceID,
-				"api_key":     apiKey,
-				"webhook_url": webhookUrl,
-				"data": map[string]interface{}{
-					"sender":      fromJID.String(),
-					"senderLid":   senderLid,
-					"unavailable": v.Unavailable,
-					"lastSeen":    v.LastSeen.Format(time.RFC3339),
-				},
-			}
-
-			body, err := json.Marshal(payload)
-			if err == nil {
-				m.rmqClient.Publish(context.Background(), "webhook_events_queue", body)
-			}
-		}
-
-	case *events.GroupInfo:
-		if m.rmqClient != nil {
-			groupJID := m.resolveLID(deviceID, v.JID)
-			var senderStr string
-			if v.Sender != nil {
-				senderStr = m.resolveLID(deviceID, *v.Sender).String()
-			}
-
-			var senderLid string
-			if v.Sender != nil && v.Sender.Server == "lid" {
-				senderLid = v.Sender.ToNonAD().String()
-			}
-
-			data := map[string]interface{}{
-				"groupId":   groupJID.String(),
-				"sender":    senderStr,
-				"senderLid": senderLid,
-				"timestamp": v.Timestamp.Unix(),
-			}
-			if v.Name != nil {
-				data["name"] = v.Name.Name
-			}
-			if v.Topic != nil {
-				data["topic"] = v.Topic.Topic
-			}
-
-			payload := map[string]interface{}{
-				"event":       "groups.update",
-				"instance_id": deviceID,
-				"api_key":     apiKey,
-				"webhook_url": webhookUrl,
-				"data":        data,
-			}
-
-			body, err := json.Marshal(payload)
-			if err == nil {
-				m.rmqClient.Publish(context.Background(), "webhook_events_queue", body)
-			}
-		}
-
-	case *events.CallOffer:
-		if m.rmqClient != nil {
-			fromJID := m.resolveLID(deviceID, v.From)
-
-			var senderLid string
-			if v.From.Server == "lid" {
-				senderLid = v.From.ToNonAD().String()
-			}
-
-			payload := map[string]interface{}{
-				"event":       "calls.offer",
-				"instance_id": deviceID,
-				"api_key":     apiKey,
-				"webhook_url": webhookUrl,
-				"data": map[string]interface{}{
-					"callId":    v.CallID,
-					"sender":    fromJID.String(),
-					"senderLid": senderLid,
-					"timestamp": v.Timestamp.Unix(),
-				},
-			}
-
-			body, err := json.Marshal(payload)
-			if err == nil {
-				m.rmqClient.Publish(context.Background(), "webhook_events_queue", body)
-			}
-		}
-	}
-	m.dispatcher.Dispatch(evt)
+// SetHooks installs the callbacks used to fan events out (webhooks, realtime, message store).
+// Must be called before Start.
+func (m *MultiClientManager) SetHooks(h Hooks) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.hooks = h
 }
 
+// Start loads every instance from the database, creates its client and connects the paired ones.
+// Unpaired instances also get a client so a QR code can be requested right after a restart.
+func (m *MultiClientManager) Start(ctx context.Context) error {
+	instances, err := m.instanceStore.GetAllInstances()
+	if err != nil {
+		return fmt.Errorf("failed to get existing instances: %w", err)
+	}
 
+	for i := range instances {
+		instance := instances[i]
+		var device *store.Device
+		if instance.JID != "" {
+			jid, perr := types.ParseJID(instance.JID)
+			if perr == nil {
+				device, err = m.container.GetDevice(ctx, jid)
+				if err != nil {
+					logger.Error("Failed to load device from store", zap.String("instance", instance.ID), zap.Error(err))
+				}
+			}
+			if device == nil {
+				// The session was removed from the store (e.g. logged out while we were down).
+				logger.Warn("Paired session not found in store, marking instance as unpaired", zap.String("instance", instance.ID))
+				_ = m.instanceStore.UpdateInstanceJID(instance.ID, "")
+				instance.JID = ""
+				instance.PairedAt = nil
+			}
+		}
+		if device == nil {
+			device = m.container.NewDevice()
+		}
+
+		m.mu.Lock()
+		client := m.newClientLocked(instance.ID, device, instance.ProxyURI)
+		m.instances[instance.ID] = &instance
+		if instance.APIKey != "" {
+			m.apiKeys[instance.APIKey] = instance.ID
+		}
+		m.mu.Unlock()
+
+		if instance.JID != "" {
+			go func(id string, c *whatsmeow.Client) {
+				if err := c.Connect(); err != nil {
+					logger.Error("Failed to connect instance", zap.String("instance", id), zap.Error(err))
+				}
+			}(instance.ID, client)
+		}
+	}
+	logger.Info("WhatsApp manager started", zap.Int("instances", len(instances)))
+	return nil
+}
+
+// newClientLocked creates a whatsmeow client for a device and wires its event handler.
+// Caller must hold m.mu.
+func (m *MultiClientManager) newClientLocked(id string, device *store.Device, proxyURI string) *whatsmeow.Client {
+	client := whatsmeow.NewClient(device, waLog.Stdout("Client", m.waLogLevel, true))
+	client.EnableAutoReconnect = true
+	if proxyURI != "" {
+		if err := client.SetProxyAddress(proxyURI); err != nil {
+			logger.Error("Failed to set proxy for device", zap.String("instance", id), zap.Error(err))
+		}
+	}
+	m.clients[id] = client
+	m.clientIDs[client] = id
+
+	// Wrap handleEvent to pass the deviceID dynamically (it can change via UpdateCredentials)
+	client.AddEventHandler(func(evt interface{}) {
+		m.mu.RLock()
+		currentID, ok := m.clientIDs[client]
+		m.mu.RUnlock()
+		if !ok {
+			return // client was replaced or deleted
+		}
+		m.handleEvent(currentID, client, evt)
+	})
+	return client
+}
+
+// resetClient replaces the client of an instance with a fresh, unpaired one.
+// Used after a logout, when the old device store is no longer valid.
+func (m *MultiClientManager) resetClient(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	old, ok := m.clients[id]
+	proxy := ""
+	if inst := m.instances[id]; inst != nil {
+		proxy = inst.ProxyURI
+	}
+	if ok {
+		old.RemoveEventHandlers()
+		delete(m.clientIDs, old)
+		go old.Disconnect()
+	}
+	m.newClientLocked(id, m.container.NewDevice(), proxy)
+}
 
 func (m *MultiClientManager) NewClientWithName(id, apiKey, name, webhookURL, proxyURI string) (string, string, *whatsmeow.Client, error) {
-    m.mu.Lock()
-    defer m.mu.Unlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
-    deviceID := id
-    if deviceID == "" {
-        u := make([]byte, 12)
-        rand.Read(u)
-        deviceID = hex.EncodeToString(u)
-    }
+	deviceID := id
+	if deviceID == "" {
+		u := make([]byte, 12)
+		rand.Read(u)
+		deviceID = hex.EncodeToString(u)
+	}
 
-    key := apiKey
-    if key == "" {
-        u := make([]byte, 16)
-        rand.Read(u)
-        u[8] = (u[8] | 0x80) & 0xBF
-        u[6] = (u[6] | 0x40) & 0x4F
-        key = fmt.Sprintf("%x-%x-%x-%x-%x", u[0:4], u[4:6], u[6:8], u[8:10], u[10:])
-    }
+	key := apiKey
+	if key == "" {
+		key = GenerateAPIKey()
+	}
 
-    if _, exists := m.clients[deviceID]; exists {
-        return "", "", nil, fmt.Errorf("client already exists")
-    }
+	if _, exists := m.clients[deviceID]; exists {
+		return "", "", nil, fmt.Errorf("client already exists")
+	}
+	if owner, exists := m.apiKeys[key]; exists && owner != deviceID {
+		return "", "", nil, fmt.Errorf("api_key already in use by another instance")
+	}
 
-    err := m.instanceStore.CreateInstance(deviceID, key, name, webhookURL, proxyURI)
-    if err != nil {
-        return "", "", nil, fmt.Errorf("failed to save instance to db: %w", err)
-    }
+	err := m.instanceStore.CreateInstance(deviceID, key, name, webhookURL, proxyURI)
+	if err != nil {
+		return "", "", nil, fmt.Errorf("failed to save instance to db: %w", err)
+	}
 
-    device := m.container.NewDevice()
-    client := whatsmeow.NewClient(device, waLog.Stdout("Client", "DEBUG", true))
-    if proxyURI != "" {
-        err := client.SetProxyAddress(proxyURI)
-        if err != nil {
-            waLog.Stdout("Manager", "ERROR", true).Infof("Failed to set proxy for device %s: %v", deviceID, err)
-        }
-    }
-    m.clients[deviceID] = client
-    m.apiKeys[key] = deviceID
-    m.clientIDs[client] = deviceID
+	client := m.newClientLocked(deviceID, m.container.NewDevice(), proxyURI)
+	m.apiKeys[key] = deviceID
+	if inst, err := m.instanceStore.GetInstanceByID(deviceID); err == nil {
+		m.instances[deviceID] = inst
+	} else {
+		m.instances[deviceID] = &Instance{ID: deviceID, Name: name, WebhookURL: webhookURL, ProxyURI: proxyURI, APIKey: key, CreatedAt: time.Now()}
+	}
 
-    // Wrap event handler to catch PAIRING success and save JID
-    client.AddEventHandler(func(evt interface{}) {
-        m.mu.RLock()
-        currentID := m.clientIDs[client]
-        m.mu.RUnlock()
+	return deviceID, key, client, nil
+}
 
-        if v, ok := evt.(*events.PairSuccess); ok {
-            m.instanceStore.UpdateInstanceJID(currentID, v.ID.String())
-            waLog.Stdout("Manager", "INFO", true).Infof("Device %s successfully paired with JID %s", currentID, v.ID.String())
-        }
-        m.handleEvent(currentID, evt)
-    })
-    
-    return deviceID, key, client, nil
+// GenerateAPIKey returns a random UUIDv4-formatted token (same format as before).
+func GenerateAPIKey() string {
+	u := make([]byte, 16)
+	rand.Read(u)
+	u[8] = (u[8] | 0x80) & 0xBF
+	u[6] = (u[6] | 0x40) & 0x4F
+	return fmt.Sprintf("%x-%x-%x-%x-%x", u[0:4], u[4:6], u[6:8], u[8:10], u[10:])
 }
 
 func (m *MultiClientManager) GetClient(deviceID string) *whatsmeow.Client {
-    m.mu.RLock()
-    defer m.mu.RUnlock()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 
-    if client, exists := m.clients[deviceID]; exists {
-        return client
-    }
+	if client, exists := m.clients[deviceID]; exists {
+		return client
+	}
 
-    if id, exists := m.apiKeys[deviceID]; exists {
-        if client, exists := m.clients[id]; exists {
-            return client
-        }
-    }
+	if id, exists := m.apiKeys[deviceID]; exists {
+		if client, exists := m.clients[id]; exists {
+			return client
+		}
+	}
 
-    return nil
+	return nil
+}
+
+// ResolveID maps an instance ID or instance api_key to the canonical instance ID.
+func (m *MultiClientManager) ResolveID(idOrKey string) (string, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if _, ok := m.instances[idOrKey]; ok {
+		return idOrKey, true
+	}
+	if id, ok := m.apiKeys[idOrKey]; ok {
+		return id, true
+	}
+	return "", false
+}
+
+// InstanceByAPIKey returns the instance owning an api_key (used for authentication).
+func (m *MultiClientManager) InstanceByAPIKey(key string) (*Instance, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	id, ok := m.apiKeys[key]
+	if !ok {
+		return nil, false
+	}
+	inst, ok := m.instances[id]
+	if !ok {
+		return nil, false
+	}
+	cp := *inst
+	return &cp, true
+}
+
+// GetInstance returns a copy of the cached instance metadata.
+func (m *MultiClientManager) GetInstance(id string) (*Instance, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	inst, ok := m.instances[id]
+	if !ok {
+		return nil, false
+	}
+	cp := *inst
+	return &cp, true
+}
+
+func (m *MultiClientManager) refreshInstance(id string) {
+	inst, err := m.instanceStore.GetInstanceByID(id)
+	if err != nil {
+		return
+	}
+	m.mu.Lock()
+	m.instances[id] = inst
+	m.mu.Unlock()
 }
 
 func (m *MultiClientManager) Connect(ctx context.Context, deviceID string) error {
-    client := m.GetClient(deviceID)
-    if client == nil {
-        return fmt.Errorf("client not found")
-    }
-    return client.Connect()
+	client := m.GetClient(deviceID)
+	if client == nil {
+		return ErrClientNotFound
+	}
+	if client.IsConnected() {
+		return nil
+	}
+	return client.Connect()
+}
+
+// Disconnect closes the websocket but keeps the session (it can reconnect without QR).
+func (m *MultiClientManager) Disconnect(deviceID string) error {
+	client := m.GetClient(deviceID)
+	if client == nil {
+		return ErrClientNotFound
+	}
+	client.Disconnect()
+	return nil
+}
+
+// Logout unlinks the device from the phone and resets the instance to unpaired.
+func (m *MultiClientManager) Logout(ctx context.Context, deviceID string) error {
+	id, ok := m.ResolveID(deviceID)
+	if !ok {
+		return ErrClientNotFound
+	}
+	client := m.GetClient(id)
+	if client != nil && client.Store.ID != nil {
+		if err := client.Logout(ctx); err != nil {
+			logger.Warn("Logout request failed, resetting locally", zap.String("instance", id), zap.Error(err))
+			_ = m.container.DeleteDevice(ctx, client.Store)
+		}
+	}
+	_ = m.instanceStore.UpdateInstanceJID(id, "")
+	m.refreshInstance(id)
+	m.resetClient(id)
+	return nil
 }
 
 func (m *MultiClientManager) GetQR(ctx context.Context, deviceID string) (<-chan string, error) {
-    client := m.GetClient(deviceID)
-    if client == nil {
-         // Cannot auto-create here because we need a name
-         return nil, fmt.Errorf("client not found and cannot be auto-created without a name")
-    }
+	client := m.GetClient(deviceID)
+	if client == nil {
+		// Cannot auto-create here because we need a name
+		return nil, fmt.Errorf("client not found and cannot be auto-created without a name")
+	}
 
-    if client.Store.ID != nil {
-        return nil, fmt.Errorf("already logged in")
-    }
+	if client.Store.ID != nil {
+		return nil, ErrAlreadyPaired
+	}
 
-    // Get the channel from whatsmeow which gives us QR events
-    qrChan, _ := client.GetQRChannel(ctx)
-    qrCodeChan := make(chan string)
+	// Get the channel from whatsmeow which gives us QR events
+	qrChan, err := client.GetQRChannel(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open QR channel: %w", err)
+	}
+	qrCodeChan := make(chan string)
 
-    // Ensure connection is active and fresh to trigger immediate QR event
-    if client.IsConnected() {
-        client.Disconnect()
-    }
-    go client.Connect()
+	// Ensure connection is active and fresh to trigger immediate QR event
+	if client.IsConnected() {
+		client.Disconnect()
+	}
+	go client.Connect()
 
-    go func() {
-        defer close(qrCodeChan)
-        waLog.Stdout("Manager", "INFO", true).Infof("Started QR stream for device %s", deviceID)
-        
-        for {
-            select {
-            case <-ctx.Done():
-                waLog.Stdout("Manager", "INFO", true).Infof("Context done, stopping QR stream for %s", deviceID)
-                return
-            case evt, ok := <-qrChan:
-                if !ok {
-                    waLog.Stdout("Manager", "INFO", true).Infof("QR channel closed by whatsmeow for %s", deviceID)
-                    return
-                }
-                if evt.Event == "code" {
-                    waLog.Stdout("Manager", "INFO", true).Infof("Received QR code event for %s", deviceID)
-                    // Non-blocking send or select with default to avoid hanging if consumer is slow
-                    select {
-                    case qrCodeChan <- evt.Code:
-                    case <-ctx.Done():
-                        return
-                    }
-                } else {
-                    waLog.Stdout("Manager", "INFO", true).Infof("Received non-code QR event: %s for %s", evt.Event, deviceID)
-                }
-            }
-        }
-    }()
+	go func() {
+		defer close(qrCodeChan)
+		logger.Debug("Started QR stream", zap.String("instance", deviceID))
 
-    return qrCodeChan, nil
+		for {
+			select {
+			case <-ctx.Done():
+				// Keep draining so whatsmeow never blocks on a full channel after we leave.
+				go drainQR(qrChan)
+				return
+			case evt, ok := <-qrChan:
+				if !ok {
+					return
+				}
+				if evt.Event == "code" {
+					select {
+					case qrCodeChan <- evt.Code:
+					case <-ctx.Done():
+						go drainQR(qrChan)
+						return
+					}
+				} else {
+					logger.Debug("Received non-code QR event", zap.String("event", evt.Event), zap.String("instance", deviceID))
+				}
+			}
+		}
+	}()
+
+	return qrCodeChan, nil
+}
+
+func drainQR(ch <-chan whatsmeow.QRChannelItem) {
+	for range ch {
+	}
+}
+
+// GetQROnce connects (if needed) and returns the first QR code, without a stream.
+func (m *MultiClientManager) GetQROnce(ctx context.Context, deviceID string) (string, error) {
+	// The QR channel must outlive this request: it keeps emitting new codes for ~160s.
+	qrCtx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ch, err := m.GetQR(qrCtx, deviceID)
+	if err != nil {
+		cancel()
+		return "", err
+	}
+	select {
+	case code, ok := <-ch:
+		if !ok {
+			cancel()
+			return "", fmt.Errorf("QR channel closed before a code was generated")
+		}
+		// Keep the stream alive in the background so the phone can still scan this code.
+		go func() {
+			for range ch {
+			}
+			cancel()
+		}()
+		return code, nil
+	case <-ctx.Done():
+		cancel()
+		return "", ctx.Err()
+	case <-time.After(30 * time.Second):
+		cancel()
+		return "", fmt.Errorf("timed out waiting for QR code")
+	}
+}
+
+// PairCode links the instance using a phone-number pairing code instead of a QR code.
+func (m *MultiClientManager) PairCode(ctx context.Context, deviceID, phone string) (string, error) {
+	client := m.GetClient(deviceID)
+	if client == nil {
+		return "", ErrClientNotFound
+	}
+	if client.Store.ID != nil {
+		return "", ErrAlreadyPaired
+	}
+	// PairPhone requires an active login websocket; opening the QR channel and waiting
+	// for the first code guarantees that. The channel lives as long as the pairing window.
+	qrCtx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	qrChan, err := client.GetQRChannel(qrCtx)
+	if err != nil {
+		cancel()
+		return "", fmt.Errorf("failed to open QR channel: %w", err)
+	}
+	if client.IsConnected() {
+		client.Disconnect()
+	}
+	if err := client.Connect(); err != nil {
+		cancel()
+		return "", fmt.Errorf("failed to connect: %w", err)
+	}
+
+	select {
+	case evt, ok := <-qrChan:
+		if !ok || evt.Event != "code" {
+			cancel()
+			return "", fmt.Errorf("unexpected QR channel state: %v", evt.Event)
+		}
+	case <-ctx.Done():
+		cancel()
+		return "", ctx.Err()
+	case <-time.After(30 * time.Second):
+		cancel()
+		return "", fmt.Errorf("timed out waiting for login websocket")
+	}
+	go func() {
+		drainQR(qrChan)
+		cancel()
+	}()
+
+	code, err := client.PairPhone(ctx, phone, true, whatsmeow.PairClientChrome, "Chrome (Linux)")
+	if err != nil {
+		return "", fmt.Errorf("pair phone: %w", err)
+	}
+	return code, nil
 }
 
 // RenameInstance updates the custom name of an instance
 func (m *MultiClientManager) RenameInstance(id, newName string) error {
-    m.mu.Lock()
-    defer m.mu.Unlock()
-
-    err := m.instanceStore.RenameInstance(id, newName)
-    if err != nil {
-         return fmt.Errorf("failed to rename instance in db: %w", err)
-    }
-    return nil
+	if err := m.instanceStore.RenameInstance(id, newName); err != nil {
+		return fmt.Errorf("failed to rename instance in db: %w", err)
+	}
+	m.refreshInstance(id)
+	return nil
 }
 
 // UpdateInstanceWebhook updates the webhook url of an instance
 func (m *MultiClientManager) UpdateInstanceWebhook(id, webhookURL string) error {
-    m.mu.Lock()
-    defer m.mu.Unlock()
-
-    err := m.instanceStore.UpdateInstanceWebhook(id, webhookURL)
-    if err != nil {
-         return fmt.Errorf("failed to update webhook in db: %w", err)
-    }
-    return nil
+	if err := m.instanceStore.UpdateInstanceWebhook(id, webhookURL); err != nil {
+		return fmt.Errorf("failed to update webhook in db: %w", err)
+	}
+	m.refreshInstance(id)
+	return nil
 }
 
 // UpdateInstanceProxy updates the proxy uri of an instance
 func (m *MultiClientManager) UpdateInstanceProxy(id, proxyURI string) error {
-    m.mu.Lock()
-    defer m.mu.Unlock()
+	if err := m.instanceStore.UpdateInstanceProxy(id, proxyURI); err != nil {
+		return fmt.Errorf("failed to update proxy in db: %w", err)
+	}
+	m.refreshInstance(id)
 
-    err := m.instanceStore.UpdateInstanceProxy(id, proxyURI)
-    if err != nil {
-         return fmt.Errorf("failed to update proxy in db: %w", err)
-    }
+	m.mu.RLock()
+	client, exists := m.clients[id]
+	m.mu.RUnlock()
+	if exists {
+		if proxyURI != "" {
+			if err := client.SetProxyAddress(proxyURI); err != nil {
+				return fmt.Errorf("invalid proxy: %w", err)
+			}
+		} else {
+			client.SetProxy(nil)
+		}
+	}
 
-    client, exists := m.clients[id]
-    if exists {
-        if proxyURI != "" {
-            client.SetProxyAddress(proxyURI)
-        } else {
-            client.SetProxy(nil)
-        }
-    }
+	return nil
+}
 
-    return nil
+// UpdateSettings replaces the behaviour settings of an instance.
+func (m *MultiClientManager) UpdateSettings(id string, settings InstanceSettings) error {
+	if err := m.instanceStore.UpdateSettings(id, settings); err != nil {
+		return fmt.Errorf("failed to update settings: %w", err)
+	}
+	m.refreshInstance(id)
+	if settings.AlwaysOnline {
+		if client := m.GetClient(id); client != nil && client.IsLoggedIn() {
+			_ = client.SendPresence(context.Background(), types.PresenceAvailable)
+		}
+	}
+	return nil
 }
 
 // DeleteInstance removes an instance, disconnects its client, and drops it from the DB
 func (m *MultiClientManager) DeleteInstance(id string) error {
-    m.mu.Lock()
-    defer m.mu.Unlock()
+	m.mu.Lock()
+	client, exists := m.clients[id]
+	if exists {
+		client.RemoveEventHandlers()
+		delete(m.clients, id)
+		delete(m.clientIDs, client)
+	}
+	for key, val := range m.apiKeys {
+		if val == id {
+			delete(m.apiKeys, key)
+		}
+	}
+	delete(m.instances, id)
+	m.mu.Unlock()
 
-    client, exists := m.clients[id]
-    if exists {
-        if client.IsConnected() {
-            client.Disconnect()
-        }
-        client.Logout(context.Background())
-        delete(m.clients, id)
-        delete(m.clientIDs, client)
-    }
+	if exists {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		if client.Store.ID != nil {
+			if err := client.Logout(ctx); err != nil {
+				_ = m.container.DeleteDevice(ctx, client.Store)
+			}
+		}
+		cancel()
+		client.Disconnect()
+	}
 
-    for key, val := range m.apiKeys {
-        if val == id {
-            delete(m.apiKeys, key)
-            break
-        }
-    }
-
-    err := m.instanceStore.DeleteInstance(id)
-    if err != nil {
-         return fmt.Errorf("failed to delete instance from db: %w", err)
-    }
-    return nil
+	if err := m.instanceStore.DeleteInstance(id); err != nil {
+		return fmt.Errorf("failed to delete instance from db: %w", err)
+	}
+	return nil
 }
 
 // UpdateCredentials updates both Device ID and API Key in DB and in-memory maps
 func (m *MultiClientManager) UpdateCredentials(oldID, newID, newAPIKey string) error {
-    m.mu.Lock()
-    defer m.mu.Unlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
-    // 1. Update database
-    err := m.instanceStore.UpdateCredentials(oldID, newID, newAPIKey)
-    if err != nil {
-        return err
-    }
+	if oldID != newID {
+		if _, taken := m.instances[newID]; taken {
+			return fmt.Errorf("instance id %q already exists", newID)
+		}
+	}
+	if owner, taken := m.apiKeys[newAPIKey]; taken && owner != oldID {
+		return fmt.Errorf("api_key already in use by another instance")
+	}
 
-    // 2. Update memory mapping
-    for key, val := range m.apiKeys {
-        if val == oldID {
-            delete(m.apiKeys, key)
-            break
-        }
-    }
-    m.apiKeys[newAPIKey] = newID
+	// 1. Update database
+	err := m.instanceStore.UpdateCredentials(oldID, newID, newAPIKey)
+	if err != nil {
+		return err
+	}
 
-    if client, exists := m.clients[oldID]; exists {
-        delete(m.clients, oldID)
-        m.clients[newID] = client
-        m.clientIDs[client] = newID
-    }
+	// 2. Update memory mapping
+	for key, val := range m.apiKeys {
+		if val == oldID {
+			delete(m.apiKeys, key)
+		}
+	}
+	m.apiKeys[newAPIKey] = newID
 
-    return nil
+	if client, exists := m.clients[oldID]; exists {
+		delete(m.clients, oldID)
+		m.clients[newID] = client
+		m.clientIDs[client] = newID
+	}
+	if inst, exists := m.instances[oldID]; exists {
+		delete(m.instances, oldID)
+		inst.ID = newID
+		inst.APIKey = newAPIKey
+		m.instances[newID] = inst
+	}
+
+	return nil
 }
 
 // GetMessageStats retrieves message statistics
 func (m *MultiClientManager) GetMessageStats(instanceID string) ([]MessageStatGroup, error) {
-    return m.instanceStore.GetMessageStats(instanceID)
+	return m.instanceStore.GetMessageStats(instanceID)
 }
 
 // RecordMessageStat increments the message count for dash charts
 func (m *MultiClientManager) RecordMessageStat(instanceID string, direction string) error {
-    return m.instanceStore.IncrementMessageStat(instanceID, direction)
+	return m.instanceStore.IncrementMessageStat(instanceID, direction)
+}
+
+// liveStatus derives the connection status shown by the API (same values as before).
+func liveStatus(inst *Instance, client *whatsmeow.Client) string {
+	status := "offline" // Default status
+
+	// If JID is empty, it means it has never successfully paired
+	if inst.JID == "" {
+		status = "unpaired"
+	}
+
+	if client != nil {
+		if client.IsLoggedIn() {
+			if client.IsConnected() {
+				status = "connected"
+			} else {
+				status = "reconnecting"
+			}
+		} else if client.Store.ID == nil {
+			// Client exists but is not logged in (waiting for QR)
+			status = "unpaired"
+		} else if client.IsConnected() {
+			status = "connecting"
+		}
+	}
+	return status
 }
 
 // ListInstances returns a list of all managed instances with metadata
 func (m *MultiClientManager) ListInstances() []Instance {
-    m.mu.RLock()
-    defer m.mu.RUnlock()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 
-    // Fetch latest from DB to get names
-    dbInstances, err := m.instanceStore.GetAllInstances()
-    if err != nil {
-        waLog.Stdout("Manager", "ERROR", true).Infof("Failed to list instances from DB: %v", err)
-        return nil
-    }
-
-    // Merge status from map
-    for i, dbInst := range dbInstances {
-        status := "offline" // Default status
-
-        // If JID is empty, it means it has never successfully paired
-        if dbInst.JID == "" {
-            status = "unpaired"
-        }
-
-        client, exists := m.clients[dbInst.ID]
-        if exists {
-            if client.IsLoggedIn() {
-                if client.IsConnected() {
-                    status = "connected"
-                } else {
-                    status = "reconnecting"
-                }
-            } else {
-                // Client exists but is not logged in (waiting for QR)
-                status = "unpaired"
-            }
-        }
-        // If client does not exist in memory, and JID was not empty, it remains "offline"
-        // If client does not exist in memory, and JID was empty, it remains "unpaired"
-
-        dbInstances[i].Status = status
-    }
-    
-    return dbInstances
+	out := make([]Instance, 0, len(m.instances))
+	for _, inst := range m.instances {
+		cp := *inst
+		cp.Status = liveStatus(inst, m.clients[inst.ID])
+		out = append(out, cp)
+	}
+	sortInstances(out)
+	return out
 }
 
-func extractContextInfo(ctx *waE2E.ContextInfo) map[string]interface{} {
-	if ctx == nil {
-		return nil
+// InstanceStatus returns the live status of a single instance.
+func (m *MultiClientManager) InstanceStatus(id string) (*Instance, *whatsmeow.Client, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	inst, ok := m.instances[id]
+	if !ok {
+		return nil, nil, false
 	}
-	res := make(map[string]interface{})
-	if ctx.StanzaID != nil {
-		res["quotedMessageId"] = ctx.GetStanzaID()
-	}
-	if ctx.Participant != nil {
-		res["quotedParticipant"] = ctx.GetParticipant()
-	}
-	if ctx.QuotedMessage != nil {
-		if ctx.QuotedMessage.Conversation != nil {
-			res["quotedMessage"] = ctx.QuotedMessage.GetConversation()
-		} else if ctx.QuotedMessage.ExtendedTextMessage != nil {
-			res["quotedMessage"] = ctx.QuotedMessage.GetExtendedTextMessage().GetText()
-		}
-	}
-	if len(ctx.MentionedJID) > 0 {
-		res["mentionedJids"] = ctx.MentionedJID
-	}
-	return res
+	cp := *inst
+	client := m.clients[id]
+	cp.Status = liveStatus(inst, client)
+	return &cp, client, true
 }
 
-func parseMessageContent(msg *waE2E.Message) (
-	msgType string,
-	content map[string]interface{},
-	contextInfo map[string]interface{},
-	reaction map[string]interface{},
-	poll map[string]interface{},
-) {
-	if msg == nil {
-		return "empty", nil, nil, nil, nil
-	}
-
-	content = make(map[string]interface{})
-
-	if msg.Conversation != nil {
-		content["conversation"] = msg.GetConversation()
-		return "conversation", content, nil, nil, nil
-	}
-
-	if msg.ExtendedTextMessage != nil {
-		ext := msg.GetExtendedTextMessage()
-		content["text"] = ext.GetText()
-		if ext.ContextInfo != nil {
-			contextInfo = extractContextInfo(ext.ContextInfo)
+// ConnectedCount returns how many instances currently have a live, logged-in connection.
+func (m *MultiClientManager) ConnectedCount() (connected, total int) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for id := range m.instances {
+		total++
+		if c := m.clients[id]; c != nil && c.IsConnected() && c.IsLoggedIn() {
+			connected++
 		}
-		return "extendedTextMessage", content, contextInfo, nil, nil
 	}
-
-	if msg.ImageMessage != nil {
-		img := msg.GetImageMessage()
-		content["caption"] = img.GetCaption()
-		content["mimetype"] = img.GetMimetype()
-		content["fileLength"] = img.GetFileLength()
-		content["url"] = img.GetURL()
-		if img.ContextInfo != nil {
-			contextInfo = extractContextInfo(img.ContextInfo)
-		}
-		return "imageMessage", content, contextInfo, nil, nil
-	}
-
-	if msg.VideoMessage != nil {
-		vid := msg.GetVideoMessage()
-		content["caption"] = vid.GetCaption()
-		content["mimetype"] = vid.GetMimetype()
-		content["fileLength"] = vid.GetFileLength()
-		content["url"] = vid.GetURL()
-		content["gifPlayback"] = vid.GetGifPlayback()
-		if vid.ContextInfo != nil {
-			contextInfo = extractContextInfo(vid.ContextInfo)
-		}
-		return "videoMessage", content, contextInfo, nil, nil
-	}
-
-	if msg.AudioMessage != nil {
-		aud := msg.GetAudioMessage()
-		content["mimetype"] = aud.GetMimetype()
-		content["fileLength"] = aud.GetFileLength()
-		content["url"] = aud.GetURL()
-		content["ptt"] = aud.GetPTT()
-		if aud.ContextInfo != nil {
-			contextInfo = extractContextInfo(aud.ContextInfo)
-		}
-		return "audioMessage", content, contextInfo, nil, nil
-	}
-
-	if msg.DocumentMessage != nil {
-		doc := msg.GetDocumentMessage()
-		content["title"] = doc.GetTitle()
-		content["fileName"] = doc.GetFileName()
-		content["mimetype"] = doc.GetMimetype()
-		content["fileLength"] = doc.GetFileLength()
-		content["url"] = doc.GetURL()
-		if doc.ContextInfo != nil {
-			contextInfo = extractContextInfo(doc.ContextInfo)
-		}
-		return "documentMessage", content, contextInfo, nil, nil
-	}
-
-	if msg.StickerMessage != nil {
-		stk := msg.GetStickerMessage()
-		content["mimetype"] = stk.GetMimetype()
-		content["fileLength"] = stk.GetFileLength()
-		content["url"] = stk.GetURL()
-		if stk.ContextInfo != nil {
-			contextInfo = extractContextInfo(stk.ContextInfo)
-		}
-		return "stickerMessage", content, contextInfo, nil, nil
-	}
-
-	if msg.LocationMessage != nil {
-		loc := msg.GetLocationMessage()
-		content["latitude"] = loc.GetDegreesLatitude()
-		content["longitude"] = loc.GetDegreesLongitude()
-		content["name"] = loc.GetName()
-		content["address"] = loc.GetAddress()
-		if loc.ContextInfo != nil {
-			contextInfo = extractContextInfo(loc.ContextInfo)
-		}
-		return "locationMessage", content, contextInfo, nil, nil
-	}
-
-	if msg.ContactMessage != nil {
-		cnt := msg.GetContactMessage()
-		content["displayName"] = cnt.GetDisplayName()
-		content["vcard"] = cnt.GetVcard()
-		if cnt.ContextInfo != nil {
-			contextInfo = extractContextInfo(cnt.ContextInfo)
-		}
-		return "contactMessage", content, contextInfo, nil, nil
-	}
-
-	if msg.ReactionMessage != nil {
-		react := msg.GetReactionMessage()
-		reaction = make(map[string]interface{})
-		reaction["text"] = react.GetText()
-		if react.Key != nil {
-			reaction["targetMessageId"] = react.Key.GetID()
-		}
-		return "reactionMessage", nil, nil, reaction, nil
-	}
-
-	if msg.PollCreationMessage != nil {
-		pollObj := msg.GetPollCreationMessage()
-		poll = make(map[string]interface{})
-		poll["question"] = pollObj.GetName()
-		var options []string
-		for _, opt := range pollObj.GetOptions() {
-			options = append(options, opt.GetOptionName())
-		}
-		poll["options"] = options
-		if pollObj.ContextInfo != nil {
-			contextInfo = extractContextInfo(pollObj.ContextInfo)
-		}
-		return "pollCreationMessage", nil, contextInfo, nil, poll
-	}
-
-	if msg.PollUpdateMessage != nil {
-		vote := msg.GetPollUpdateMessage()
-		poll = make(map[string]interface{})
-		if vote.PollCreationMessageKey != nil {
-			poll["targetPollId"] = vote.PollCreationMessageKey.GetID()
-		}
-		return "pollUpdateMessage", nil, nil, nil, poll
-	}
-
-	if msg.ButtonsMessage != nil {
-		btn := msg.GetButtonsMessage()
-		content["contentText"] = btn.GetContentText()
-		content["footerText"] = btn.GetFooterText()
-		if btn.ContextInfo != nil {
-			contextInfo = extractContextInfo(btn.ContextInfo)
-		}
-		return "buttonsMessage", content, contextInfo, nil, nil
-	}
-
-	if msg.ListMessage != nil {
-		lst := msg.GetListMessage()
-		content["title"] = lst.GetTitle()
-		content["description"] = lst.GetDescription()
-		content["buttonText"] = lst.GetButtonText()
-		if lst.ContextInfo != nil {
-			contextInfo = extractContextInfo(lst.ContextInfo)
-		}
-		return "listMessage", content, contextInfo, nil, nil
-	}
-
-	return "unknown", nil, nil, nil, nil
+	return
 }
+
+// Shutdown disconnects every client (sessions are kept, they reconnect on next boot).
+func (m *MultiClientManager) Shutdown() {
+	m.mu.RLock()
+	clients := make([]*whatsmeow.Client, 0, len(m.clients))
+	for _, c := range m.clients {
+		clients = append(clients, c)
+	}
+	m.mu.RUnlock()
+
+	var wg sync.WaitGroup
+	for _, c := range clients {
+		wg.Add(1)
+		go func(c *whatsmeow.Client) {
+			defer wg.Done()
+			c.Disconnect()
+		}(c)
+	}
+	wg.Wait()
+}
+
+func (m *MultiClientManager) Container() *sqlstore.Container { return m.container }
 
 func (m *MultiClientManager) resolveLID(deviceID string, jid types.JID) types.JID {
 	if jid.Server != "lid" {
@@ -981,3 +721,7 @@ func (m *MultiClientManager) resolveLID(deviceID string, jid types.JID) types.JI
 	return jid
 }
 
+// ResolveLID is the exported form used by services outside this package.
+func (m *MultiClientManager) ResolveLID(deviceID string, jid types.JID) types.JID {
+	return m.resolveLID(deviceID, jid)
+}
