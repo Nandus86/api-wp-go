@@ -127,6 +127,28 @@ func (h *Handler) Router() http.Handler {
 				v.Get("/message/async", h.UazListAsync)
 				v.Get("/sender/listfolders", h.UazSenderListFolders)
 				v.Post("/sender/listmessages", h.UazSenderListMessages)
+
+				// Read-only WhatsApp queries
+				v.Get("/device/{id}/settings", h.GetDeviceSettings)
+				v.Get("/instance/status", h.UazInstanceStatus)
+				v.Get("/instance/privacy", h.UazGetPrivacy)
+				v.Get("/instance/proxy", h.UazGetProxy)
+				v.Get("/group/list", h.UazGroupList)
+				v.Post("/group/list", h.UazGroupList)
+				v.Post("/group/info", h.UazGroupInfo)
+				v.Post("/group/inviteInfo", h.UazGroupInviteInfo)
+				v.Get("/chat/blocklist", h.UazChatBlocklist)
+				v.Post("/chat/check", h.UazChatCheck)
+				v.Post("/chat/details", h.UazChatDetails)
+				v.Post("/chat/find", h.UazChatFind)
+				v.Get("/labels", h.UazLabels)
+				v.Get("/contacts", h.UazContacts)
+				v.Post("/contacts/list", h.UazContactsList)
+				v.Get("/newsletter/list", h.UazNewsletterList)
+				v.Post("/newsletter/info", h.UazNewsletterInfo)
+				v.Post("/newsletter/link", h.UazNewsletterLink)
+				v.Post("/newsletter/messages", h.UazNewsletterMessages)
+				v.Post("/newsletter/updates", h.UazNewsletterUpdates)
 			})
 
 			// Operator: manage instances and send messages
@@ -186,6 +208,63 @@ func (h *Handler) Router() http.Handler {
 				o.Post("/sender/edit", h.UazSenderEdit)
 				o.Post("/sender/cleardone", h.UazSenderClearDone)
 				o.Delete("/sender/clearall", h.UazSenderClearAll)
+
+				// Device lifecycle
+				o.Post("/device/{id}/pair-code", h.PairDevice)
+				o.Post("/device/{id}/logout", h.LogoutDevice)
+				o.Post("/device/{id}/disconnect", h.DisconnectDevice)
+				o.Put("/device/{id}/settings", h.UpdateDeviceSettings)
+
+				// Instance (UAZAPI)
+				o.Post("/instance/connect", h.UazInstanceConnect)
+				o.Post("/instance/disconnect", h.UazInstanceDisconnect)
+				o.Post("/instance/reset", h.UazInstanceReset)
+				o.Delete("/instance", h.UazInstanceDelete)
+				o.Post("/instance/updateInstanceName", h.UazUpdateInstanceName)
+				o.Post("/instance/privacy", h.UazSetPrivacy)
+				o.Post("/instance/presence", h.UazInstancePresence)
+				o.Post("/instance/proxy", h.UazSetProxy)
+				o.Post("/profile/name", h.UazProfileName)
+				o.Post("/profile/image", h.UazProfileImage)
+				o.Post("/call/reject", h.UazRejectCall)
+
+				// Groups and communities
+				o.Post("/group/create", h.UazGroupCreate)
+				o.Post("/group/join", h.UazGroupJoin)
+				o.Post("/group/leave", h.UazGroupLeave)
+				o.Post("/group/resetInviteCode", h.UazGroupResetInvite)
+				o.Post("/group/updateAnnounce", h.UazGroupUpdateAnnounce)
+				o.Post("/group/updateJoinApproval", h.UazGroupUpdateJoinApproval)
+				o.Post("/group/updateMemberAddMode", h.UazGroupUpdateMemberAddMode)
+				o.Post("/group/updateDescription", h.UazGroupUpdateDescription)
+				o.Post("/group/ephemeral", h.UazGroupEphemeral)
+				o.Post("/group/updateImage", h.UazGroupUpdateImage)
+				o.Post("/group/updateLocked", h.UazGroupUpdateLocked)
+				o.Post("/group/updateName", h.UazGroupUpdateName)
+				o.Post("/group/updateParticipants", h.UazGroupUpdateParticipants)
+				o.Post("/community/create", h.UazCommunityCreate)
+				o.Post("/community/editgroups", h.UazCommunityEditGroups)
+
+				// Channels
+				o.Post("/newsletter/create", h.UazNewsletterCreate)
+				o.Post("/newsletter/follow", h.UazNewsletterFollow)
+				o.Post("/newsletter/unfollow", h.UazNewsletterUnfollow)
+				o.Post("/newsletter/subscribe", h.UazNewsletterSubscribe)
+				o.Post("/newsletter/mute", h.UazNewsletterMute)
+				o.Post("/newsletter/unmute", h.UazNewsletterUnmute)
+				o.Post("/newsletter/viewed", h.UazNewsletterViewed)
+				o.Post("/newsletter/reaction", h.UazNewsletterReaction)
+
+				// Chats and labels
+				o.Post("/chat/block", h.UazChatBlock)
+				o.Post("/chat/archive", h.UazChatArchive)
+				o.Post("/chat/read", h.UazChatRead)
+				o.Post("/chat/mute", h.UazChatMute)
+				o.Post("/chat/pin", h.UazChatPin)
+				o.Post("/chat/ephemeral", h.UazChatEphemeral)
+				o.Post("/chat/delete", h.UazChatDelete)
+				o.Post("/chat/labels", h.UazChatLabels)
+				o.Post("/label/edit", h.UazLabelEdit)
 			})
 
 			// Admin
@@ -193,6 +272,8 @@ func (h *Handler) Router() http.Handler {
 				a.Use(requireRole(auth.RoleAdmin))
 				a.Get("/logs", h.GetLogs)
 				a.Get("/audit", h.ListAudit)
+				a.Post("/instance/create", h.UazInstanceCreate)
+				a.Get("/instance/all", h.UazInstanceAll)
 
 				// Debug endpoints for testing buttons and lists
 				a.Post("/debug/send-button", h.DebugSendButton)

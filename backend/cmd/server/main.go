@@ -144,6 +144,12 @@ func main() {
 	manager.SetHooks(whatsapp.Hooks{
 		Emit:      webhookService.Emit,
 		OnMessage: history.SaveIncoming,
+		OnEvent: func(instanceID string, evt interface{}) {
+			switch evt.(type) {
+			case *events.LabelEdit, *events.LabelAssociationChat:
+				go history.HandleAppStateEvent(instanceID, evt)
+			}
+		},
 		OnReceipt: func(instanceID string, evt *events.Receipt) {
 			status := messages.StatusFromReceipt(evt.Type)
 			if status == "" {

@@ -34,6 +34,8 @@ type Hooks struct {
 	OnReceipt func(instanceID string, evt *events.Receipt)
 	// OnStatus is called when the connection state of an instance changes.
 	OnStatus func(instanceID, state string)
+	// OnEvent receives every raw whatsmeow event (labels, app state, realtime...).
+	OnEvent func(instanceID string, evt interface{})
 }
 
 func (m *MultiClientManager) emit(ev OutboundEvent) {
@@ -82,6 +84,9 @@ func (m *MultiClientManager) handleEvent(deviceID string, client *whatsmeow.Clie
 	m.mu.RLock()
 	hooks := m.hooks
 	m.mu.RUnlock()
+	if hooks.OnEvent != nil {
+		hooks.OnEvent(deviceID, evt)
+	}
 
 	switch v := evt.(type) {
 	case *events.Message:

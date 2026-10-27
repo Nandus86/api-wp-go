@@ -39,6 +39,7 @@ type MultiClientManager struct {
 	apiKeys       map[string]string            // Maps apiKey -> deviceID
 	clientIDs     map[*whatsmeow.Client]string // Maps client -> deviceID
 	instances     map[string]*Instance         // In-memory cache of instance metadata (by ID)
+	pairing       map[string]PairingState      // Latest QR / pairing code per instance
 	mu            sync.RWMutex
 	dispatcher    *EventDispatcher
 	instanceStore *InstanceStore
@@ -63,6 +64,7 @@ func NewMultiClientManager(opts Options, dispatcher *EventDispatcher, rmqClient 
 		apiKeys:       make(map[string]string),
 		clientIDs:     make(map[*whatsmeow.Client]string),
 		instances:     make(map[string]*Instance),
+		pairing:       make(map[string]PairingState),
 		dispatcher:    dispatcher,
 		instanceStore: NewInstanceStore(opts.DB),
 		rmqClient:     rmqClient,
@@ -342,6 +344,12 @@ func (m *MultiClientManager) GetQR(ctx context.Context, deviceID string) (<-chan
 		return nil, ErrAlreadyPaired
 	}
 
+	// A QR channel can only be opened on a disconnected client, so restart any login
+	// attempt already in progress (e.g. the QR dialog was reopened).
+	if client.IsConnected() {
+		client.Disconnect()
+	}
+
 	// Get the channel from whatsmeow which gives us QR events
 	qrChan, err := client.GetQRChannel(ctx)
 	if err != nil {
@@ -349,10 +357,6 @@ func (m *MultiClientManager) GetQR(ctx context.Context, deviceID string) (<-chan
 	}
 	qrCodeChan := make(chan string)
 
-	// Ensure connection is active and fresh to trigger immediate QR event
-	if client.IsConnected() {
-		client.Disconnect()
-	}
 	go client.Connect()
 
 	go func() {
@@ -370,6 +374,7 @@ func (m *MultiClientManager) GetQR(ctx context.Context, deviceID string) (<-chan
 					return
 				}
 				if evt.Event == "code" {
+					m.setPairing(deviceID, PairingState{QRCode: evt.Code, ExpiresAt: time.Now().Add(evt.Timeout)})
 					select {
 					case qrCodeChan <- evt.Code:
 					case <-ctx.Done():
@@ -433,14 +438,14 @@ func (m *MultiClientManager) PairCode(ctx context.Context, deviceID, phone strin
 	}
 	// PairPhone requires an active login websocket; opening the QR channel and waiting
 	// for the first code guarantees that. The channel lives as long as the pairing window.
+	if client.IsConnected() {
+		client.Disconnect()
+	}
 	qrCtx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	qrChan, err := client.GetQRChannel(qrCtx)
 	if err != nil {
 		cancel()
 		return "", fmt.Errorf("failed to open QR channel: %w", err)
-	}
-	if client.IsConnected() {
-		client.Disconnect()
 	}
 	if err := client.Connect(); err != nil {
 		cancel()
@@ -469,7 +474,38 @@ func (m *MultiClientManager) PairCode(ctx context.Context, deviceID, phone strin
 	if err != nil {
 		return "", fmt.Errorf("pair phone: %w", err)
 	}
+	m.setPairing(deviceID, PairingState{PairCode: code, ExpiresAt: time.Now().Add(160 * time.Second)})
 	return code, nil
+}
+
+// PairingState is the latest QR code or pairing code generated for an instance.
+type PairingState struct {
+	QRCode    string    `json:"qrcode,omitempty"`
+	PairCode  string    `json:"paircode,omitempty"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+func (m *MultiClientManager) setPairing(id string, st PairingState) {
+	if canonical, ok := m.ResolveID(id); ok {
+		id = canonical
+	}
+	m.mu.Lock()
+	m.pairing[id] = st
+	m.mu.Unlock()
+}
+
+// Pairing returns the pending QR/pairing code of an unpaired instance (if still valid).
+func (m *MultiClientManager) Pairing(id string) (PairingState, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	st, ok := m.pairing[id]
+	if !ok || time.Now().After(st.ExpiresAt) {
+		return PairingState{}, false
+	}
+	if c := m.clients[id]; c != nil && c.Store.ID != nil {
+		return PairingState{}, false
+	}
+	return st, true
 }
 
 // RenameInstance updates the custom name of an instance
