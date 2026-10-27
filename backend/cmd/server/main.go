@@ -108,6 +108,18 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Webhooks: transactional outbox (RabbitMQ buffer -> Postgres -> signed HTTP delivery)
+	webhookService := webhook.NewService(webhook.NewStore(db), rmqClient, webhook.Config{
+		GlobalURL:     cfg.WebhookURL,
+		Secret:        cfg.WebhookSecret,
+		Timeout:       cfg.WebhookTimeout,
+		MaxAttempts:   cfg.WebhookMaxAttempts,
+		Workers:       cfg.WebhookWorkers,
+		RetentionDays: cfg.WebhookRetentionDays,
+		UserAgent:     "whatsmeow-basileia/" + api.Version,
+	})
+	manager.SetHooks(whatsapp.Hooks{Emit: webhookService.Emit})
+
 	if err := manager.Start(ctx); err != nil {
 		logger.Error("Failed to start WhatsApp manager", zap.Error(err))
 		os.Exit(1)
@@ -120,8 +132,7 @@ func main() {
 	mediaWorker := messaging.NewMediaWorker(rmqClient, manager, logger.Log)
 	mediaWorker.Start()
 
-	whWorker := webhook.NewWorker(rmqClient, logger.Log, cfg.WebhookURL)
-	whWorker.Start()
+	webhookService.Start(ctx)
 
 	// 6. Authentication + audit
 	authService := auth.NewService(db, cfg.AdminAPIKey, func(token string) (string, string, bool) {
@@ -157,6 +168,7 @@ func main() {
 		Config:   cfg,
 		Auth:     authService,
 		Audit:    auditStore,
+		Webhooks: webhookService,
 	})
 	if err != nil {
 		logger.Error("Invalid HTTP configuration", zap.Error(err))

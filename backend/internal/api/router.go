@@ -17,6 +17,7 @@ import (
 	"github.com/user/whatsmeow-basileia/internal/infrastructure/storage"
 	"github.com/user/whatsmeow-basileia/internal/infrastructure/whatsapp"
 	"github.com/user/whatsmeow-basileia/internal/ratelimit"
+	"github.com/user/whatsmeow-basileia/internal/service/webhook"
 	"github.com/user/whatsmeow-basileia/pkg/config"
 )
 
@@ -31,6 +32,7 @@ type Handler struct {
 	audit       *audit.Store
 	limiter     *ratelimit.Limiter
 	allowedNets []*net.IPNet
+	webhooks    *webhook.Service
 }
 
 // Deps groups everything the HTTP layer needs. Optional components (Redis, Storage) may be nil.
@@ -43,6 +45,7 @@ type Deps struct {
 	Config   *config.Config
 	Auth     *auth.Service
 	Audit    *audit.Store
+	Webhooks *webhook.Service
 }
 
 func NewHandler(d Deps) (*Handler, error) {
@@ -61,6 +64,7 @@ func NewHandler(d Deps) (*Handler, error) {
 		audit:       d.Audit,
 		limiter:     ratelimit.New(d.Redis),
 		allowedNets: nets,
+		webhooks:    d.Webhooks,
 	}, nil
 }
 
@@ -100,6 +104,14 @@ func (h *Handler) Router() http.Handler {
 				v.Get("/device", h.ListDevices)
 				v.Get("/device/{id}/status", h.GetStatus)
 				v.Get("/stats", h.GetStats)
+
+				v.Get("/webhooks", h.ListWebhooks)
+				v.Get("/webhooks/stats", h.DeliveryStats)
+				v.Get("/webhooks/deliveries", h.ListDeliveries)
+				v.Get("/webhooks/deliveries/{id}", h.GetDelivery)
+				v.Get("/webhooks/{id}", h.GetWebhook)
+				v.Get("/webhook", h.UazGetWebhook)
+				v.Get("/webhook/errors", h.UazWebhookErrors)
 			})
 
 			// Operator: manage instances and send messages
@@ -135,6 +147,14 @@ func (h *Handler) Router() http.Handler {
 				})
 				// Documented in SendUazGeneric but was never routed before.
 				o.Post("/message/presence", h.SendUazGeneric)
+
+				o.Post("/webhooks", h.CreateWebhook)
+				o.Put("/webhooks/{id}", h.UpdateWebhook)
+				o.Delete("/webhooks/{id}", h.DeleteWebhook)
+				o.Post("/webhooks/{id}/test", h.TestWebhook)
+				o.Post("/webhooks/deliveries/redrive", h.RedriveDeliveries)
+				o.Post("/webhooks/deliveries/{id}/redrive", h.RedriveDelivery)
+				o.Post("/webhook", h.UazSetWebhook)
 			})
 
 			// Admin
@@ -155,6 +175,10 @@ func (h *Handler) Router() http.Handler {
 				a.Post("/auth/keys", h.CreateAPIKey)
 				a.Put("/auth/keys/{id}", h.UpdateAPIKey)
 				a.Delete("/auth/keys/{id}", h.DeleteAPIKey)
+
+				a.Get("/globalwebhook", h.UazGetGlobalWebhook)
+				a.Post("/globalwebhook", h.UazSetGlobalWebhook)
+				a.Get("/globalwebhook/errors", h.UazGlobalWebhookErrors)
 			})
 		})
 	})
