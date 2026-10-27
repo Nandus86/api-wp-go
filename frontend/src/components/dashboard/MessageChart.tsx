@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from 'react'
 import { Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis, CartesianGrid } from 'recharts'
-import { fetchStats } from '@/lib/api'
+import { fetchStats, type MessageStatGroup } from '@/lib/api'
 import type { Instance } from '@/types'
 import { Loader2 } from 'lucide-react'
 
@@ -9,7 +9,7 @@ interface MessageChartProps {
 }
 
 export function MessageChart({ instances }: MessageChartProps) {
-    const [stats, setStats] = useState<any[]>([])
+    const [stats, setStats] = useState<MessageStatGroup[]>([])
     const [loading, setLoading] = useState(true)
     const [selectedInstance, setSelectedInstance] = useState<string>('all')
 

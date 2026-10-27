@@ -60,7 +60,7 @@ type chatBlockInput struct {
 // @Produce json
 // @Param token header string true "Instance Token"
 // @Param request body chatBlockInput true "number, block"
-// @Success 200 {object} types.Blocklist
+// @Success 200 {object} map[string]interface{}
 // @Router /chat/block [post]
 func (h *Handler) UazChatBlock(w http.ResponseWriter, r *http.Request) {
 	var in chatBlockInput
@@ -85,7 +85,7 @@ func (h *Handler) UazChatBlock(w http.ResponseWriter, r *http.Request) {
 // @Tags uazapi-chats
 // @Produce json
 // @Param token header string true "Instance Token"
-// @Success 200 {object} types.Blocklist
+// @Success 200 {object} map[string]interface{}
 // @Router /chat/blocklist [get]
 func (h *Handler) UazChatBlocklist(w http.ResponseWriter, r *http.Request) {
 	_, client, ok := h.clientFor(w, r, "")

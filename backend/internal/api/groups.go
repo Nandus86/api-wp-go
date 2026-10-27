@@ -58,7 +58,7 @@ type groupCreateInput struct {
 // @Produce json
 // @Param token header string true "Instance Token"
 // @Param request body groupCreateInput true "Group"
-// @Success 200 {object} types.GroupInfo
+// @Success 200 {object} map[string]interface{}
 // @Router /group/create [post]
 func (h *Handler) UazGroupCreate(w http.ResponseWriter, r *http.Request) {
 	var in groupCreateInput
@@ -156,7 +156,7 @@ func inviteCode(s string) string {
 // @Produce json
 // @Param token header string true "Instance Token"
 // @Param request body inviteInput true "Invite code or https://chat.whatsapp.com/... link"
-// @Success 200 {object} types.GroupInfo
+// @Success 200 {object} map[string]interface{}
 // @Router /group/inviteInfo [post]
 func (h *Handler) UazGroupInviteInfo(w http.ResponseWriter, r *http.Request) {
 	var in inviteInput
@@ -573,7 +573,7 @@ func (h *Handler) UazGroupList(w http.ResponseWriter, r *http.Request) {
 // @Produce json
 // @Param token header string true "Instance Token"
 // @Param request body nameInput true "Community name"
-// @Success 200 {object} types.GroupInfo
+// @Success 200 {object} map[string]interface{}
 // @Router /community/create [post]
 func (h *Handler) UazCommunityCreate(w http.ResponseWriter, r *http.Request) {
 	var in nameInput

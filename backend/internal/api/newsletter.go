@@ -68,7 +68,7 @@ func (h *Handler) newsletterCall(w http.ResponseWriter, r *http.Request, needJID
 // @Produce json
 // @Param token header string true "Instance Token"
 // @Param request body newsletterInput true "name, description, picture"
-// @Success 200 {object} types.NewsletterMetadata
+// @Success 200 {object} map[string]interface{}
 // @Router /newsletter/create [post]
 func (h *Handler) UazNewsletterCreate(w http.ResponseWriter, r *http.Request) {
 	h.newsletterCall(w, r, false, func(r *http.Request, c *whatsmeow.Client, _ types.JID, in newsletterInput) (interface{}, error) {
@@ -92,7 +92,7 @@ func (h *Handler) UazNewsletterCreate(w http.ResponseWriter, r *http.Request) {
 // @Tags uazapi-newsletter
 // @Produce json
 // @Param token header string true "Instance Token"
-// @Success 200 {array} types.NewsletterMetadata
+// @Success 200 {array} map[string]interface{}
 // @Router /newsletter/list [get]
 func (h *Handler) UazNewsletterList(w http.ResponseWriter, r *http.Request) {
 	h.newsletterCall(w, r, false, func(r *http.Request, c *whatsmeow.Client, _ types.JID, _ newsletterInput) (interface{}, error) {
@@ -107,7 +107,7 @@ func (h *Handler) UazNewsletterList(w http.ResponseWriter, r *http.Request) {
 // @Produce json
 // @Param token header string true "Instance Token"
 // @Param request body newsletterInput true "id or jid"
-// @Success 200 {object} types.NewsletterMetadata
+// @Success 200 {object} map[string]interface{}
 // @Router /newsletter/info [post]
 func (h *Handler) UazNewsletterInfo(w http.ResponseWriter, r *http.Request) {
 	h.newsletterCall(w, r, true, func(r *http.Request, c *whatsmeow.Client, jid types.JID, _ newsletterInput) (interface{}, error) {
@@ -122,7 +122,7 @@ func (h *Handler) UazNewsletterInfo(w http.ResponseWriter, r *http.Request) {
 // @Produce json
 // @Param token header string true "Instance Token"
 // @Param request body newsletterInput true "key"
-// @Success 200 {object} types.NewsletterMetadata
+// @Success 200 {object} map[string]interface{}
 // @Router /newsletter/link [post]
 func (h *Handler) UazNewsletterLink(w http.ResponseWriter, r *http.Request) {
 	h.newsletterCall(w, r, false, func(r *http.Request, c *whatsmeow.Client, _ types.JID, in newsletterInput) (interface{}, error) {
@@ -219,7 +219,7 @@ func (h *Handler) UazNewsletterUnmute(w http.ResponseWriter, r *http.Request) {
 // @Produce json
 // @Param token header string true "Instance Token"
 // @Param request body newsletterInput true "id or jid, count, beforeid"
-// @Success 200 {array} types.NewsletterMessage
+// @Success 200 {array} map[string]interface{}
 // @Router /newsletter/messages [post]
 func (h *Handler) UazNewsletterMessages(w http.ResponseWriter, r *http.Request) {
 	h.newsletterCall(w, r, true, func(r *http.Request, c *whatsmeow.Client, jid types.JID, in newsletterInput) (interface{}, error) {
@@ -239,7 +239,7 @@ func (h *Handler) UazNewsletterMessages(w http.ResponseWriter, r *http.Request) 
 // @Produce json
 // @Param token header string true "Instance Token"
 // @Param request body newsletterInput true "id or jid, count, since, afterid"
-// @Success 200 {array} types.NewsletterMessage
+// @Success 200 {array} map[string]interface{}
 // @Router /newsletter/updates [post]
 func (h *Handler) UazNewsletterUpdates(w http.ResponseWriter, r *http.Request) {
 	h.newsletterCall(w, r, true, func(r *http.Request, c *whatsmeow.Client, jid types.JID, in newsletterInput) (interface{}, error) {

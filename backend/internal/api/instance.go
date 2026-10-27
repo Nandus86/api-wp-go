@@ -267,7 +267,7 @@ func (h *Handler) UazInstanceAll(w http.ResponseWriter, r *http.Request) {
 // @Tags uazapi-instance
 // @Produce json
 // @Param token header string true "Instance Token"
-// @Success 200 {object} types.PrivacySettings
+// @Success 200 {object} map[string]interface{}
 // @Router /instance/privacy [get]
 func (h *Handler) UazGetPrivacy(w http.ResponseWriter, r *http.Request) {
 	_, client, ok := h.clientFor(w, r, "")
@@ -290,7 +290,7 @@ func (h *Handler) UazGetPrivacy(w http.ResponseWriter, r *http.Request) {
 // @Produce json
 // @Param token header string true "Instance Token"
 // @Param request body map[string]string true "Settings"
-// @Success 200 {object} types.PrivacySettings
+// @Success 200 {object} map[string]interface{}
 // @Router /instance/privacy [post]
 func (h *Handler) UazSetPrivacy(w http.ResponseWriter, r *http.Request) {
 	var in map[string]string

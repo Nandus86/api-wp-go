@@ -25,7 +25,7 @@ type Event struct {
 	Event      string          `json:"event"`
 	InstanceID string          `json:"instance_id"`
 	Timestamp  int64           `json:"timestamp"`
-	Data       json.RawMessage `json:"data"`
+	Data       json.RawMessage `json:"data" swaggertype:"object"`
 }
 
 // Filter selects which events a subscriber gets.

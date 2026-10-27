@@ -26,7 +26,7 @@ type Job struct {
 	InstanceID  string          `json:"instance_id"`
 	BatchID     string          `json:"batch_id,omitempty"`
 	Queue       string          `json:"queue"`
-	Payload     json.RawMessage `json:"payload,omitempty"`
+	Payload     json.RawMessage `json:"payload,omitempty" swaggertype:"object"`
 	Recipient   string          `json:"recipient,omitempty"`
 	Status      string          `json:"status"`
 	Attempts    int             `json:"attempts"`
