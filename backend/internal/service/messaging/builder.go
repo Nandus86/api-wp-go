@@ -40,7 +40,6 @@ func (b *MessageBuilder) WithText(text string) *MessageBuilder {
 
 func (b *MessageBuilder) WithButtons(text string, footer string, title string, buttons []string) *MessageBuilder {
 
-
 	var replyButtons []*waE2E.ButtonsMessage_Button
 	for i, buttonText := range buttons {
 		parts := splitChoice(buttonText)
@@ -334,9 +333,9 @@ func (b *MessageBuilder) WithMedia(resp whatsmeow.UploadResponse, mediaType what
 			Caption:       proto.String(caption),
 		}
 	case whatsmeow.MediaDocument:
-        if fileName == "" {
-            fileName = "document"
-        }
+		if fileName == "" {
+			fileName = "document"
+		}
 		b.msg.DocumentMessage = &waE2E.DocumentMessage{
 			URL:           proto.String(resp.URL),
 			DirectPath:    proto.String(resp.DirectPath),
@@ -346,7 +345,7 @@ func (b *MessageBuilder) WithMedia(resp whatsmeow.UploadResponse, mediaType what
 			FileLength:    proto.Uint64(uint64(resp.FileLength)),
 			Mimetype:      proto.String(mimeType),
 			FileName:      proto.String(fileName),
-            Caption:       proto.String(caption),
+			Caption:       proto.String(caption),
 		}
 	case whatsmeow.MediaAudio:
 		if mimeType == "" {
@@ -458,42 +457,42 @@ func (b *MessageBuilder) Send(ctx context.Context) (string, error) {
 	}
 
 	// Debug: Log full message details before sending
-	fmt.Printf("\n\n====== OUTGOING MESSAGE BUILDER (DEBUG) ======\n")
-	fmt.Printf("JID: %s\n", b.jid.String())
-	fmt.Printf("Has MessageContextInfo: %v\n", b.msg.MessageContextInfo != nil)
+	debugf("\n\n====== OUTGOING MESSAGE BUILDER (DEBUG) ======\n")
+	debugf("JID: %s\n", b.jid.String())
+	debugf("Has MessageContextInfo: %v\n", b.msg.MessageContextInfo != nil)
 	if b.msg.MessageContextInfo != nil {
-		fmt.Printf("Has MessageSecret: %v (len=%d)\n", 
+		debugf("Has MessageSecret: %v (len=%d)\n",
 			b.msg.MessageContextInfo.MessageSecret != nil,
 			len(b.msg.MessageContextInfo.MessageSecret))
 	}
-	fmt.Printf("Extra Nodes Count: %d\n", len(b.extraNodes))
+	debugf("Extra Nodes Count: %d\n", len(b.extraNodes))
 	if len(b.extraNodes) > 0 {
 		for i, node := range b.extraNodes {
-			fmt.Printf("Extra Node[%d]: Tag=%s, Attrs=%v, ContentLen=%d\n", 
+			debugf("Extra Node[%d]: Tag=%s, Attrs=%v, ContentLen=%d\n",
 				i, node.Tag, node.Attrs, len(node.GetChildren()))
 		}
 	}
-	fmt.Printf("Protobuf:\n%+v\n", b.msg)
-	fmt.Printf("==========================================\n\n")
+	debugf("Protobuf:\n%+v\n", b.msg)
+	debugf("==========================================\n\n")
 
 	var err error
 
 	extra := whatsmeow.SendRequestExtra{}
 	if len(b.extraNodes) > 0 {
 		extra.AdditionalNodes = &b.extraNodes
-		fmt.Printf("DEBUG: Setting AdditionalNodes (%d nodes)\n", len(b.extraNodes))
+		debugf("DEBUG: Setting AdditionalNodes (%d nodes)\n", len(b.extraNodes))
 	} else {
-		fmt.Printf("DEBUG: No AdditionalNodes set\n")
+		debugf("DEBUG: No AdditionalNodes set\n")
 	}
 
 	for i := 0; i <= b.retry; i++ {
-		fmt.Printf("DEBUG: Attempt %d to send message\n", i+1)
+		debugf("DEBUG: Attempt %d to send message\n", i+1)
 		resp, sendErr := b.client.SendMessage(ctx, b.jid, b.msg, extra)
 		if sendErr == nil {
-			fmt.Printf("DEBUG: Message sent successfully, ID=%s\n", resp.ID)
+			debugf("DEBUG: Message sent successfully, ID=%s\n", resp.ID)
 			return resp.ID, nil
 		}
-		fmt.Printf("DEBUG: Send failed: %v\n", sendErr)
+		debugf("DEBUG: Send failed: %v\n", sendErr)
 		err = sendErr
 		time.Sleep(time.Duration(i) * time.Second)
 	}

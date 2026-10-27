@@ -18,10 +18,12 @@ import (
 	redisinfra "github.com/user/whatsmeow-basileia/internal/infrastructure/redis"
 	"github.com/user/whatsmeow-basileia/internal/infrastructure/storage"
 	"github.com/user/whatsmeow-basileia/internal/infrastructure/whatsapp"
+	"github.com/user/whatsmeow-basileia/internal/service/messages"
 	"github.com/user/whatsmeow-basileia/internal/service/messaging"
 	"github.com/user/whatsmeow-basileia/internal/service/webhook"
 	"github.com/user/whatsmeow-basileia/pkg/config"
 	"github.com/user/whatsmeow-basileia/pkg/logger"
+	"go.mau.fi/whatsmeow/types/events"
 	"go.uber.org/zap"
 )
 
@@ -118,7 +120,46 @@ func main() {
 		RetentionDays: cfg.WebhookRetentionDays,
 		UserAgent:     "whatsmeow-basileia/" + api.Version,
 	})
-	manager.SetHooks(whatsapp.Hooks{Emit: webhookService.Emit})
+	// Message history + outbound jobs (Postgres) with send pacing (Redis)
+	messaging.Debug = cfg.Debug
+	history := messages.NewStore(db, objectStore, messages.Options{
+		ArchiveMedia:  cfg.MediaArchiveEnabled,
+		MediaMaxBytes: cfg.MediaMaxBytes,
+	})
+	pacer := messaging.NewPacer(messaging.PacingConfig{
+		Enabled:     cfg.SendPacingEnabled,
+		Schedule:    cfg.SendPacingSchedule,
+		ColdCap:     cfg.SendPacingColdCap,
+		FailBreaker: cfg.SendPacingFailBreaker,
+	}, redisClient)
+	messagingService := messaging.NewService(messaging.NewJobStore(db), rmqClient, manager, history, pacer, objectStore, messaging.Config{
+		Workers:        cfg.MessageWorkers,
+		MaxAttempts:    cfg.MessageMaxAttempts,
+		SimulateTyping: cfg.SimulateTyping,
+		RetentionDays:  cfg.MessageRetentionDays,
+		MediaMaxBytes:  cfg.MediaMaxBytes,
+		ArchiveMedia:   cfg.MediaArchiveEnabled,
+	}, logger.Log)
+
+	manager.SetHooks(whatsapp.Hooks{
+		Emit:      webhookService.Emit,
+		OnMessage: history.SaveIncoming,
+		OnReceipt: func(instanceID string, evt *events.Receipt) {
+			status := messages.StatusFromReceipt(evt.Type)
+			if status == "" {
+				return
+			}
+			ids := make([]string, len(evt.MessageIDs))
+			for i, id := range evt.MessageIDs {
+				ids[i] = string(id)
+			}
+			go func() {
+				rctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				_ = history.UpdateStatus(rctx, instanceID, ids, status)
+			}()
+		},
+	})
 
 	if err := manager.Start(ctx); err != nil {
 		logger.Error("Failed to start WhatsApp manager", zap.Error(err))
@@ -126,12 +167,7 @@ func main() {
 	}
 
 	// 5. Queue workers (after the manager so every instance already has a client)
-	msgWorker := messaging.NewWorker(rmqClient, manager, logger.Log)
-	msgWorker.Start()
-
-	mediaWorker := messaging.NewMediaWorker(rmqClient, manager, logger.Log)
-	mediaWorker.Start()
-
+	messagingService.Start(ctx)
 	webhookService.Start(ctx)
 
 	// 6. Authentication + audit
@@ -160,15 +196,16 @@ func main() {
 
 	// 7. HTTP API
 	handler, err := api.NewHandler(api.Deps{
-		Manager:  manager,
-		RabbitMQ: rmqClient,
-		DB:       db,
-		Redis:    redisClient,
-		Storage:  objectStore,
-		Config:   cfg,
-		Auth:     authService,
-		Audit:    auditStore,
-		Webhooks: webhookService,
+		Manager:   manager,
+		RabbitMQ:  rmqClient,
+		DB:        db,
+		Redis:     redisClient,
+		Storage:   objectStore,
+		Config:    cfg,
+		Auth:      authService,
+		Audit:     auditStore,
+		Webhooks:  webhookService,
+		Messaging: messagingService,
 	})
 	if err != nil {
 		logger.Error("Invalid HTTP configuration", zap.Error(err))

@@ -195,3 +195,8 @@ func parseMessageContent(msg *waE2E.Message) (
 
 	return "unknown", nil, nil, nil, nil
 }
+
+// ParseMessageContent is the exported form used by the message history store.
+func ParseMessageContent(msg *waE2E.Message) (msgType string, content, contextInfo, reaction, poll map[string]interface{}) {
+	return parseMessageContent(msg)
+}

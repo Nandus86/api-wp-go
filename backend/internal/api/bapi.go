@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+
+	"github.com/user/whatsmeow-basileia/internal/infrastructure/rabbitmq"
+	"github.com/user/whatsmeow-basileia/internal/service/messaging"
 )
 
 // UazSendMessageRequest represents the payload for UazAPI message endpoints
@@ -15,6 +18,8 @@ type UazSendMessageRequest struct {
 	Caption  string `json:"caption,omitempty"`
 	File     string `json:"file,omitempty"`
 	Filename string `json:"filename,omitempty"`
+	DocName  string `json:"docName,omitempty"`
+	MimeType string `json:"mimetype,omitempty"`
 	Async    bool   `json:"async,omitempty"`
 
 	// Contact
@@ -35,18 +40,26 @@ type UazSendMessageRequest struct {
 	Choices    []string `json:"choices,omitempty"`
 
 	// Interactive / Buttons / Poll
-	Title     string   `json:"title,omitempty"`
-	Footer    string   `json:"footer,omitempty"`
-	Buttons   []string `json:"buttons,omitempty"`
-	Question  string   `json:"question,omitempty"`
-	Options   []string `json:"options,omitempty"`
-	MaxAnswer int      `json:"maxAnswer,omitempty"`
+	Title      string   `json:"title,omitempty"`
+	Footer     string   `json:"footer,omitempty"`
+	FooterText string   `json:"footerText,omitempty"`
+	Buttons    []string `json:"buttons,omitempty"`
+	Question   string   `json:"question,omitempty"`
+	Options    []string `json:"options,omitempty"`
+	MaxAnswer  int      `json:"maxAnswer,omitempty"`
 
 	// payment / pix
 	Amount  float64 `json:"amount,omitempty"`
 	PixKey  string  `json:"pixKey,omitempty"`
 	PixType string  `json:"pixType,omitempty"`
 	PixName string  `json:"pixName,omitempty"`
+
+	// delay, replyid, mentions, track_source, track_id
+	messaging.SendOptions
+}
+
+func trackOpts(o messaging.SendOptions) messaging.EnqueueOptions {
+	return messaging.EnqueueOptions{TrackSource: o.TrackSource, TrackID: o.TrackID}
 }
 
 // SendUazGeneric handles all other UazAPI message types
@@ -134,6 +147,7 @@ func (h *Handler) SendUazGeneric(w http.ResponseWriter, r *http.Request) {
 		"choices":     req.Choices,
 		"title":       req.Title,
 		"footer":      req.Footer,
+		"footerText":  req.FooterText,
 		"buttons":     req.Buttons,
 		"question":    req.Question,
 		"options":     req.Options,
@@ -142,15 +156,12 @@ func (h *Handler) SendUazGeneric(w http.ResponseWriter, r *http.Request) {
 		"pixKey":      req.PixKey,
 		"pixType":     req.PixType,
 		"pixName":     req.PixName,
+		"delay":       req.Delay,
+		"replyid":     req.ReplyID,
+		"mentions":    req.Mentions,
 	}
 
-	payloadBytes, err := json.Marshal(payload)
-	if err != nil {
-		http.Error(w, "Failed to encode message to queue", http.StatusInternalServerError)
-		return
-	}
-
-	err = h.rmqClient.Publish(r.Context(), "send_message_queue", payloadBytes)
+	jobID, err := h.messaging.Enqueue(r.Context(), token, rabbitmq.QueueSendMessage, payload, trackOpts(req.SendOptions))
 	if err != nil {
 		http.Error(w, "Failed to enqueue message", http.StatusInternalServerError)
 		return
@@ -158,7 +169,8 @@ func (h *Handler) SendUazGeneric(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"id": "queued",
+		"id":     "queued",
+		"job_id": jobID,
 		"response": map[string]string{
 			"status":  "success",
 			"message": "Message sent successfully",
@@ -193,18 +205,13 @@ func (h *Handler) SendUazText(w http.ResponseWriter, r *http.Request) {
 
 	// Map to internal format
 	internalReq := SendMessageRequest{
-		DeviceID: token,
-		Phone:    req.Number,
-		Text:     req.Text,
+		DeviceID:    token,
+		Phone:       req.Number,
+		Text:        req.Text,
+		SendOptions: req.SendOptions,
 	}
 
-	payloadBytes, err := json.Marshal(internalReq)
-	if err != nil {
-		http.Error(w, "Failed to encode message to queue", http.StatusInternalServerError)
-		return
-	}
-
-	err = h.rmqClient.Publish(r.Context(), "send_message_queue", payloadBytes)
+	jobID, err := h.messaging.Enqueue(r.Context(), token, rabbitmq.QueueSendMessage, internalReq, trackOpts(req.SendOptions))
 	if err != nil {
 		http.Error(w, "Failed to enqueue message", http.StatusInternalServerError)
 		return
@@ -213,7 +220,8 @@ func (h *Handler) SendUazText(w http.ResponseWriter, r *http.Request) {
 	// UazAPI success format
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"id": "queued",
+		"id":     "queued",
+		"job_id": jobID,
 		"response": map[string]string{
 			"status":  "success",
 			"message": "Message sent successfully",
@@ -248,26 +256,40 @@ func (h *Handler) SendUazMedia(w http.ResponseWriter, r *http.Request) {
 
 	// Detect type
 	mediaType := "image"
-	if req.Type == "document" || req.Type == "video" || req.Type == "audio" {
+	switch req.Type {
+	case "document", "video", "audio":
 		mediaType = req.Type
+	case "ptt", "myaudio":
+		mediaType = "audio"
+	}
+
+	// UAZAPI sends the caption in "text" and the file name in "docName".
+	caption := req.Caption
+	if caption == "" {
+		caption = req.Text
+	}
+	fileName := req.Filename
+	if fileName == "" {
+		fileName = req.DocName
 	}
 
 	internalReq := SendMediaRequest{
-		DeviceID: token,
-		Phone:    req.Number,
-		Type:     mediaType,
-		MediaURL: req.File,
-		Caption:  req.Caption,
-		FileName: req.Filename,
+		DeviceID:    token,
+		Phone:       req.Number,
+		Type:        mediaType,
+		Caption:     caption,
+		FileName:    fileName,
+		MimeType:    req.MimeType,
+		SendOptions: req.SendOptions,
+	}
+	// "file" may be a URL, an uploaded media reference or base64 data.
+	if strings.HasPrefix(req.File, "data:") || (!strings.Contains(req.File, "://") && !strings.HasPrefix(req.File, messaging.MediaRefPrefix) && len(req.File) > 200) {
+		internalReq.Base64 = req.File
+	} else {
+		internalReq.MediaURL = req.File
 	}
 
-	payloadBytes, err := json.Marshal(internalReq)
-	if err != nil {
-		http.Error(w, "Failed to encode message to queue", http.StatusInternalServerError)
-		return
-	}
-
-	err = h.rmqClient.Publish(r.Context(), "send_media_queue", payloadBytes)
+	jobID, err := h.messaging.Enqueue(r.Context(), token, rabbitmq.QueueSendMedia, internalReq, trackOpts(req.SendOptions))
 	if err != nil {
 		http.Error(w, "Failed to enqueue message", http.StatusInternalServerError)
 		return
@@ -275,7 +297,8 @@ func (h *Handler) SendUazMedia(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"id": "queued",
+		"id":     "queued",
+		"job_id": jobID,
 		"response": map[string]string{
 			"status":  "success",
 			"message": "Media sent successfully",
@@ -302,13 +325,7 @@ func (h *Handler) DebugSendButton(w http.ResponseWriter, r *http.Request) {
 		"buttons":   []string{"Option 1|id_1", "Option 2|id_2"},
 	}
 
-	payloadBytes, err := json.Marshal(payload)
-	if err != nil {
-		http.Error(w, "Failed to encode message to queue", http.StatusInternalServerError)
-		return
-	}
-
-	err = h.rmqClient.Publish(r.Context(), "send_message_queue", payloadBytes)
+	jobID, err := h.messaging.Enqueue(r.Context(), token, rabbitmq.QueueSendMessage, payload, messaging.EnqueueOptions{})
 	if err != nil {
 		http.Error(w, "Failed to enqueue message", http.StatusInternalServerError)
 		return
@@ -317,6 +334,7 @@ func (h *Handler) DebugSendButton(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":  "success",
+		"job_id":  jobID,
 		"message": "Debug button message queued - check logs for detailed protobuf dump",
 	})
 }
@@ -341,13 +359,7 @@ func (h *Handler) DebugSendList(w http.ResponseWriter, r *http.Request) {
 		"choices":    []string{"[Section 1]", "Option 1|id_1|Description 1", "Option 2|id_2|Description 2"},
 	}
 
-	payloadBytes, err := json.Marshal(payload)
-	if err != nil {
-		http.Error(w, "Failed to encode message to queue", http.StatusInternalServerError)
-		return
-	}
-
-	err = h.rmqClient.Publish(r.Context(), "send_message_queue", payloadBytes)
+	jobID, err := h.messaging.Enqueue(r.Context(), token, rabbitmq.QueueSendMessage, payload, messaging.EnqueueOptions{})
 	if err != nil {
 		http.Error(w, "Failed to enqueue message", http.StatusInternalServerError)
 		return
@@ -356,6 +368,7 @@ func (h *Handler) DebugSendList(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":  "success",
+		"job_id":  jobID,
 		"message": "Debug list message queued - check logs for detailed protobuf dump",
 	})
 }

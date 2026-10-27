@@ -8,7 +8,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/user/whatsmeow-basileia/internal/auth"
+	"github.com/user/whatsmeow-basileia/internal/infrastructure/rabbitmq"
 	"github.com/user/whatsmeow-basileia/internal/infrastructure/whatsapp"
+	"github.com/user/whatsmeow-basileia/internal/service/messaging"
 	"github.com/user/whatsmeow-basileia/pkg/logger"
 	"go.uber.org/zap"
 )
@@ -26,6 +28,9 @@ type SendMessageRequest struct {
 	Buttons    []string `json:"buttons,omitempty"`
 	Choices    []string `json:"choices,omitempty" swaggerignore:"true"`    // Basileapi alias for Buttons
 	ListButton string   `json:"listButton,omitempty" swaggerignore:"true"` // for list button text
+
+	// delay, replyid, mentions, track_source, track_id
+	messaging.SendOptions
 }
 
 type SendMediaRequest struct {
@@ -39,6 +44,9 @@ type SendMediaRequest struct {
 	Text     string `json:"text,omitempty" swaggerignore:"true"` // Basileapi alias for Caption
 	MimeType string `json:"mimetype,omitempty"`
 	FileName string `json:"fileName,omitempty"`
+
+	// delay, replyid, mentions, track_source, track_id
+	messaging.SendOptions
 }
 
 type SendCopyButtonRequest struct {
@@ -458,20 +466,14 @@ func (h *Handler) SendInteractiveButton(w http.ResponseWriter, r *http.Request) 
 	}
 	req.DeviceID = deviceID
 
-	payloadBytes, err := json.Marshal(req)
-	if err != nil {
-		http.Error(w, "Failed to encode message to queue", http.StatusInternalServerError)
-		return
-	}
-
-	err = h.rmqClient.Publish(r.Context(), "send_message_queue", payloadBytes)
+	jobID, err := h.messaging.Enqueue(r.Context(), req.DeviceID, rabbitmq.QueueSendMessage, req, messaging.EnqueueOptions{TrackSource: req.TrackSource, TrackID: req.TrackID})
 	if err != nil {
 		http.Error(w, "Failed to enqueue message", http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "queued"})
+	json.NewEncoder(w).Encode(map[string]string{"status": "queued", "job_id": jobID})
 }
 
 // SendText sends a plain text WhatsApp message via Queue
@@ -499,20 +501,14 @@ func (h *Handler) SendText(w http.ResponseWriter, r *http.Request) {
 	// Forcing type to empty so builder creates a text message
 	req.Type = ""
 
-	payloadBytes, err := json.Marshal(req)
-	if err != nil {
-		http.Error(w, "Failed to encode message to queue", http.StatusInternalServerError)
-		return
-	}
-
-	err = h.rmqClient.Publish(r.Context(), "send_message_queue", payloadBytes)
+	jobID, err := h.messaging.Enqueue(r.Context(), req.DeviceID, rabbitmq.QueueSendMessage, req, messaging.EnqueueOptions{TrackSource: req.TrackSource, TrackID: req.TrackID})
 	if err != nil {
 		http.Error(w, "Failed to enqueue message", http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "queued"})
+	json.NewEncoder(w).Encode(map[string]string{"status": "queued", "job_id": jobID})
 }
 
 // SendMedia sends a media WhatsApp message via Queue
@@ -537,20 +533,14 @@ func (h *Handler) SendMedia(w http.ResponseWriter, r *http.Request) {
 	}
 	req.DeviceID = deviceID
 
-	payloadBytes, err := json.Marshal(req)
-	if err != nil {
-		http.Error(w, "Failed to encode message to queue", http.StatusInternalServerError)
-		return
-	}
-
-	err = h.rmqClient.Publish(r.Context(), "send_media_queue", payloadBytes)
+	jobID, err := h.messaging.Enqueue(r.Context(), req.DeviceID, rabbitmq.QueueSendMedia, req, messaging.EnqueueOptions{TrackSource: req.TrackSource, TrackID: req.TrackID})
 	if err != nil {
 		http.Error(w, "Failed to enqueue message", http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "queued"})
+	json.NewEncoder(w).Encode(map[string]string{"status": "queued", "job_id": jobID})
 }
 
 // SendInteractiveCopyButton sends a WhatsApp interactive copy button message via Queue
@@ -575,21 +565,14 @@ func (h *Handler) SendInteractiveCopyButton(w http.ResponseWriter, r *http.Reque
 	}
 	req.DeviceID = deviceID
 
-	payloadBytes, err := json.Marshal(req)
-	if err != nil {
-		http.Error(w, "Failed to encode message to queue", http.StatusInternalServerError)
-		return
-	}
-
-	// Reusing the standard send_message_queue as it's lightweight JSON
-	err = h.rmqClient.Publish(r.Context(), "send_message_queue", payloadBytes)
+	jobID, err := h.messaging.Enqueue(r.Context(), req.DeviceID, rabbitmq.QueueSendMessage, req, messaging.EnqueueOptions{})
 	if err != nil {
 		http.Error(w, "Failed to enqueue message", http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "queued"})
+	json.NewEncoder(w).Encode(map[string]string{"status": "queued", "job_id": jobID})
 }
 
 type UpdateCredentialsRequest struct {

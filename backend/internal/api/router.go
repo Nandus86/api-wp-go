@@ -17,6 +17,8 @@ import (
 	"github.com/user/whatsmeow-basileia/internal/infrastructure/storage"
 	"github.com/user/whatsmeow-basileia/internal/infrastructure/whatsapp"
 	"github.com/user/whatsmeow-basileia/internal/ratelimit"
+	"github.com/user/whatsmeow-basileia/internal/service/messages"
+	"github.com/user/whatsmeow-basileia/internal/service/messaging"
 	"github.com/user/whatsmeow-basileia/internal/service/webhook"
 	"github.com/user/whatsmeow-basileia/pkg/config"
 )
@@ -33,19 +35,22 @@ type Handler struct {
 	limiter     *ratelimit.Limiter
 	allowedNets []*net.IPNet
 	webhooks    *webhook.Service
+	messaging   *messaging.Service
+	history     *messages.Store
 }
 
 // Deps groups everything the HTTP layer needs. Optional components (Redis, Storage) may be nil.
 type Deps struct {
-	Manager  *whatsapp.MultiClientManager
-	RabbitMQ *rabbitmq.Client
-	DB       *sql.DB
-	Redis    *goredis.Client
-	Storage  *storage.Storage
-	Config   *config.Config
-	Auth     *auth.Service
-	Audit    *audit.Store
-	Webhooks *webhook.Service
+	Manager   *whatsapp.MultiClientManager
+	RabbitMQ  *rabbitmq.Client
+	DB        *sql.DB
+	Redis     *goredis.Client
+	Storage   *storage.Storage
+	Config    *config.Config
+	Auth      *auth.Service
+	Audit     *audit.Store
+	Webhooks  *webhook.Service
+	Messaging *messaging.Service
 }
 
 func NewHandler(d Deps) (*Handler, error) {
@@ -65,6 +70,8 @@ func NewHandler(d Deps) (*Handler, error) {
 		limiter:     ratelimit.New(d.Redis),
 		allowedNets: nets,
 		webhooks:    d.Webhooks,
+		messaging:   d.Messaging,
+		history:     d.Messaging.History(),
 	}, nil
 }
 
@@ -112,6 +119,14 @@ func (h *Handler) Router() http.Handler {
 				v.Get("/webhooks/{id}", h.GetWebhook)
 				v.Get("/webhook", h.UazGetWebhook)
 				v.Get("/webhook/errors", h.UazWebhookErrors)
+
+				v.Get("/message/job/{id}", h.GetJob)
+				v.Get("/device/{id}/messages", h.ListMessages)
+				v.Get("/device/{id}/pacing", h.PacingStatus)
+				v.Post("/message/find", h.UazFindMessages)
+				v.Get("/message/async", h.UazListAsync)
+				v.Get("/sender/listfolders", h.UazSenderListFolders)
+				v.Post("/sender/listmessages", h.UazSenderListMessages)
 			})
 
 			// Operator: manage instances and send messages
@@ -155,6 +170,22 @@ func (h *Handler) Router() http.Handler {
 				o.Post("/webhooks/deliveries/redrive", h.RedriveDeliveries)
 				o.Post("/webhooks/deliveries/{id}/redrive", h.RedriveDelivery)
 				o.Post("/webhook", h.UazSetWebhook)
+
+				o.Post("/message/react", h.UazReact)
+				o.Post("/message/delete", h.UazDeleteMessage)
+				o.Post("/message/edit", h.UazEditMessage)
+				o.Post("/message/markread", h.UazMarkRead)
+				o.Post("/message/pin", h.UazPinMessage)
+				o.Post("/message/download", h.UazDownload)
+				o.Delete("/message/async", h.UazClearAsync)
+				o.Post("/instance/updateDelaySettings", h.UazUpdateDelaySettings)
+				o.Post("/media/upload", h.UploadMedia)
+
+				o.Post("/sender/simple", h.UazSenderSimple)
+				o.Post("/sender/advanced", h.UazSenderAdvanced)
+				o.Post("/sender/edit", h.UazSenderEdit)
+				o.Post("/sender/cleardone", h.UazSenderClearDone)
+				o.Delete("/sender/clearall", h.UazSenderClearAll)
 			})
 
 			// Admin

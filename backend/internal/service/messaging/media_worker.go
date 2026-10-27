@@ -4,23 +4,21 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
 
-	"github.com/user/whatsmeow-basileia/internal/infrastructure/rabbitmq"
-	"github.com/user/whatsmeow-basileia/internal/infrastructure/whatsapp"
 	"github.com/user/whatsmeow-basileia/internal/service/media"
-	"github.com/user/whatsmeow-basileia/pkg/logger"
 	"go.mau.fi/whatsmeow"
-	"go.mau.fi/whatsmeow/types"
 	"go.uber.org/zap"
 )
 
 type SendMediaPayload struct {
 	DeviceID string `json:"device_id"`
+	JobID    string `json:"job_id,omitempty"`
 	Number   string `json:"number,omitempty"`
 	Phone    string `json:"phone,omitempty"`
 	MediaURL string `json:"media_url,omitempty"`
@@ -30,35 +28,17 @@ type SendMediaPayload struct {
 	Text     string `json:"text,omitempty"` // Basileapi alias for Caption
 	MimeType string `json:"mimetype,omitempty"`
 	FileName string `json:"fileName,omitempty"`
+
+	SendOptions
 }
 
-type MediaWorker struct {
-	rmqClient *rabbitmq.Client
-	manager   *whatsapp.MultiClientManager
-	logger    *zap.Logger
-}
+// MediaRefPrefix marks a media_url that points to an object uploaded via /api/media/upload.
+const MediaRefPrefix = "media:"
 
-func NewMediaWorker(rmqClient *rabbitmq.Client, manager *whatsapp.MultiClientManager, logger *zap.Logger) *MediaWorker {
-	return &MediaWorker{
-		rmqClient: rmqClient,
-		manager:   manager,
-		logger:    logger,
-	}
-}
-
-func (w *MediaWorker) Start() {
-	err := w.rmqClient.Consume("send_media_queue", w.handleSendMedia)
-	if err != nil {
-		w.logger.Error("Failed to start consuming send_media_queue", zap.Error(err))
-	} else {
-		w.logger.Info("Started RabbitMQ worker for send_media_queue")
-	}
-}
-
-func (w *MediaWorker) handleSendMedia(body []byte) error {
+func (s *Service) handleSendMedia(body []byte) error {
 	var payload SendMediaPayload
 	if err := json.Unmarshal(body, &payload); err != nil {
-		w.logger.Error("Failed to unmarshal media payload", zap.Error(err))
+		s.log.Error("Failed to unmarshal media payload", zap.Error(err))
 		return nil // don't requeue bad format
 	}
 
@@ -70,126 +50,143 @@ func (w *MediaWorker) handleSendMedia(body []byte) error {
 		payload.Caption = payload.Text
 	}
 
-	client := w.manager.GetClient(payload.DeviceID)
-	if client == nil {
-		w.logger.Warn("Device not found for media sending", zap.String("deviceID", payload.DeviceID))
-		return fmt.Errorf("device not found")
-	}
+	return s.runJob(payload.JobID, payload.DeviceID, func(ctx context.Context, sc *sendContext) sendOutcome {
+		client := sc.client
 
-	if !client.IsConnected() {
-		w.logger.Warn("Device not connected", zap.String("deviceID", payload.DeviceID))
-		return fmt.Errorf("device not connected")
-	}
-
-	// Auto-correct number formatting (solves 9th digit in BR) using WhatsApp's directory
-	var remoteJID types.JID
-	isVerified := false
-	respWA, errWA := client.IsOnWhatsApp(context.Background(), []string{payload.Number})
-	if errWA == nil && len(respWA) > 0 && respWA[0].IsIn {
-		remoteJID = respWA[0].JID
-		isVerified = true
-	}
-
-	if !isVerified {
-		var parseErr error
-		remoteJID, parseErr = types.ParseJID(payload.Number + "@s.whatsapp.net")
-		if parseErr != nil {
-			w.logger.Error("Invalid phone number format", zap.Error(parseErr))
-			return nil
+		// Map type to whatsmeow.MediaType
+		var mediaType whatsmeow.MediaType
+		switch strings.ToLower(payload.Type) {
+		case "image":
+			mediaType = whatsmeow.MediaImage
+		case "video":
+			mediaType = whatsmeow.MediaVideo
+		case "audio", "ptt", "myaudio":
+			mediaType = whatsmeow.MediaAudio
+		case "document":
+			mediaType = whatsmeow.MediaDocument
+		default:
+			return sendOutcome{err: fmt.Errorf("unsupported media type %q", payload.Type), permanent: true}
 		}
-	}
 
-	// Map type to whatsmeow.MediaType
-	var mediaType whatsmeow.MediaType
-	switch strings.ToLower(payload.Type) {
-	case "image":
-		mediaType = whatsmeow.MediaImage
-	case "video":
-		mediaType = whatsmeow.MediaVideo
-	case "audio":
-		mediaType = whatsmeow.MediaAudio
-	case "document":
-		mediaType = whatsmeow.MediaDocument
-	default:
-		w.logger.Error("Unsupported media type", zap.String("type", payload.Type))
-		return nil
-	}
+		// Auto-correct number formatting (solves 9th digit in BR) using WhatsApp's directory
+		remoteJID, err := ResolveRecipient(ctx, client, payload.Number)
+		if err != nil {
+			return sendOutcome{err: err, permanent: isPermanent(err)}
+		}
 
-	// Get Media Data (URL or Base64)
-	var data []byte
-	if payload.Base64 != "" {
-		w.logger.Info("Decoding base64 media...")
-		// base64 standard decoding
-		importB64 := "encoding/base64"
-		_ = importB64 // will rely on goimports or standard import
-		
+		data, err := s.loadMedia(ctx, payload)
+		if err != nil {
+			return sendOutcome{err: err, permanent: isPermanent(err)}
+		}
+		if payload.MimeType == "" {
+			payload.MimeType = http.DetectContentType(data)
+			if mediaType == whatsmeow.MediaAudio {
+				payload.MimeType = "" // keep the builder default (ogg/opus PTT)
+			}
+		}
+
+		// Use our MediaService Uploader logic
+		uploader := media.NewUploader(client)
+		ctxUpload, cancelUpload := context.WithTimeout(ctx, 2*time.Minute)
+		defer cancelUpload()
+
+		s.log.Info("Uploading media to WhatsApp servers...", zap.Int("bytes", len(data)))
+		uploadResp, err := uploader.Upload(ctxUpload, data, mediaType)
+		if err != nil {
+			return sendOutcome{err: fmt.Errorf("upload media to WhatsApp: %w", err)}
+		}
+
+		// Build message and send
+		builder := NewMessageBuilder(client, remoteJID.String())
+		builder.WithMedia(uploadResp, mediaType, payload.MimeType, payload.FileName, payload.Caption)
+
+		out := s.deliver(ctx, sc, builder, payload.SendOptions, len(payload.Caption))
+		if out.err == nil && s.cfg.ArchiveMedia && s.history != nil {
+			go func(id string) {
+				actx, cancel := context.WithTimeout(context.Background(), time.Minute)
+				defer cancel()
+				mime := payload.MimeType
+				if mime == "" {
+					mime = http.DetectContentType(data)
+				}
+				// Give the history writer a moment to persist the row first.
+				time.Sleep(time.Second)
+				if _, err := s.history.ArchiveBytes(actx, sc.instanceID, id, data, mime, time.Now()); err != nil {
+					s.log.Warn("Failed to archive outgoing media", zap.Error(err))
+				}
+			}(out.msgID)
+		}
+		return out
+	})
+}
+
+// loadMedia reads the media from base64, an uploaded object (media:<key>) or a URL.
+func (s *Service) loadMedia(ctx context.Context, payload SendMediaPayload) ([]byte, error) {
+	switch {
+	case payload.Base64 != "":
 		// Remove data URI prefix if present (e.g. data:image/png;base64,)
 		b64str := payload.Base64
-		idx := strings.Index(b64str, ";base64,")
-		if idx != -1 {
+		if idx := strings.Index(b64str, ";base64,"); idx != -1 {
 			b64str = b64str[idx+8:]
 		}
-
-		decodedBytes, err := base64.StdEncoding.DecodeString(b64str)
+		data, err := base64.StdEncoding.DecodeString(strings.TrimSpace(b64str))
 		if err != nil {
-			w.logger.Error("Failed to decode base64 string", zap.Error(err))
-			return nil // Don't requeue if invalid base64
+			return nil, permanentf("invalid base64 media: %v", err)
 		}
-		data = decodedBytes
-	} else if payload.MediaURL != "" {
-		w.logger.Info("Downloading media...", zap.String("url", payload.MediaURL))
-		resp, err := http.Get(payload.MediaURL)
+		return data, nil
+
+	case strings.HasPrefix(payload.MediaURL, MediaRefPrefix):
+		if !s.storage.Enabled() {
+			return nil, permanentf("media reference used but object storage is not configured")
+		}
+		data, _, err := s.storage.Get(ctx, strings.TrimPrefix(payload.MediaURL, MediaRefPrefix))
 		if err != nil {
-			w.logger.Error("Failed to download media", zap.Error(err))
-			return err
+			return nil, fmt.Errorf("read uploaded media: %w", err)
+		}
+		return data, nil
+
+	case payload.MediaURL != "":
+		s.log.Info("Downloading media...", zap.String("url", payload.MediaURL))
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, payload.MediaURL, nil)
+		if err != nil {
+			return nil, permanentf("invalid media url: %v", err)
+		}
+		resp, err := s.http.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("download media: %w", err)
 		}
 		defer resp.Body.Close()
-
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+			return nil, permanentf("media URL returned HTTP %d", resp.StatusCode)
+		}
 		if resp.StatusCode != http.StatusOK {
-			w.logger.Error("Media URL returned non-200 status", zap.Int("status", resp.StatusCode))
-			return nil // Not a retryable error usually
+			return nil, fmt.Errorf("media URL returned HTTP %d", resp.StatusCode)
 		}
-
-		downloadedBytes, err := io.ReadAll(resp.Body)
+		limit := s.cfg.MediaMaxBytes
+		if limit <= 0 {
+			limit = 64 << 20
+		}
+		data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 		if err != nil {
-			w.logger.Error("Failed to read media body", zap.Error(err))
-			return err
+			return nil, fmt.Errorf("read media body: %w", err)
 		}
-		data = downloadedBytes
-	} else {
-		w.logger.Error("No media_url nor base64 provided in payload")
-		return nil
+		if int64(len(data)) > limit {
+			return nil, permanentf("media larger than %d bytes", limit)
+		}
+		return data, nil
 	}
+	return nil, permanentf("no media_url nor base64 provided in payload")
+}
 
-	// Use our MediaService Uploader logic
-	uploader := media.NewUploader(client)
-	ctxUpload, cancelUpload := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancelUpload()
+type permanentError struct{ msg string }
 
-	w.logger.Info("Uploading media to WhatsApp servers...")
-	uploadResp, err := uploader.Upload(ctxUpload, data, mediaType)
-	if err != nil {
-		w.logger.Error("Failed to upload media to WhatsApp", zap.Error(err))
-		return err
-	}
+func (e *permanentError) Error() string { return e.msg }
 
-	// Build message and send
-	builder := NewMessageBuilder(client, remoteJID.String())
-	builder.WithMedia(uploadResp, mediaType, payload.MimeType, payload.FileName, payload.Caption)
+func permanentf(format string, args ...interface{}) error {
+	return &permanentError{msg: fmt.Sprintf(format, args...)}
+}
 
-	ctxSend, cancelSend := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancelSend()
-
-	msgID, err := builder.Send(ctxSend)
-	if err != nil {
-		w.logger.Error("Failed to send media message after retries", zap.Error(err))
-		logger.PushLog("error", "Failed to send media: "+err.Error())
-		return err
-	}
-
-	w.logger.Info("Media message sent successfully via queue", zap.String("msgID", msgID), zap.String("phone", payload.Number))
-	logger.PushLog("info", "Media message sent successfully to "+payload.Number)
-	w.manager.RecordMessageStat(payload.DeviceID, "out")
-
-	return nil
+func isPermanent(err error) bool {
+	var p *permanentError
+	return errors.As(err, &p)
 }
