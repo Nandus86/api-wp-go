@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import QRCode from 'react-qr-code'
 import { X, Loader2, CheckCircle2 } from 'lucide-react'
 import { toast } from 'sonner'
-import { API_BASE } from '@/lib/api'
+import { fetchDeviceStatus, getQRCodeSSEUrl } from '@/lib/api'
 
 interface QRCodeDialogProps {
     isOpen: boolean
@@ -38,7 +38,7 @@ export function QRCodeDialog({ isOpen, instanceId, instanceName, onClose, onConn
                 return
             }
 
-            eventSource = new EventSource(`${API_BASE}/device/${instanceId}/qr`)
+            eventSource = new EventSource(getQRCodeSSEUrl(instanceId))
 
             eventSource.onopen = () => {
                 console.log('SSE connection opened');
@@ -70,9 +70,8 @@ export function QRCodeDialog({ isOpen, instanceId, instanceName, onClose, onConn
 
         const checkStatus = async () => {
             try {
-                const res = await fetch(`${API_BASE}/device/${instanceId}/status`)
-                if (res.ok) {
-                    const data = await res.json()
+                const data = await fetchDeviceStatus(instanceId)
+                {
                     if (data.status === 'connected') {
                         setStatus('connected')
                         toast.success('Device paired successfully!')

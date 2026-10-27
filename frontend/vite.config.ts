@@ -12,10 +12,14 @@ export default defineConfig({
   },
   server: {
     proxy: {
+      // The backend serves everything under /api, so the prefix is kept.
       '/api': {
         target: 'http://localhost:8080',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, ''),
+      },
+      '/ws': {
+        target: 'ws://localhost:8080',
+        ws: true,
       },
     },
   },
