@@ -16,7 +16,9 @@ import (
 	"github.com/user/whatsmeow-basileia/internal/infrastructure/rabbitmq"
 	"github.com/user/whatsmeow-basileia/internal/infrastructure/storage"
 	"github.com/user/whatsmeow-basileia/internal/infrastructure/whatsapp"
+	"github.com/user/whatsmeow-basileia/internal/metrics"
 	"github.com/user/whatsmeow-basileia/internal/ratelimit"
+	"github.com/user/whatsmeow-basileia/internal/realtime"
 	"github.com/user/whatsmeow-basileia/internal/service/messages"
 	"github.com/user/whatsmeow-basileia/internal/service/messaging"
 	"github.com/user/whatsmeow-basileia/internal/service/webhook"
@@ -37,6 +39,8 @@ type Handler struct {
 	webhooks    *webhook.Service
 	messaging   *messaging.Service
 	history     *messages.Store
+	hub         *realtime.Hub
+	metrics     *metrics.Metrics
 }
 
 // Deps groups everything the HTTP layer needs. Optional components (Redis, Storage) may be nil.
@@ -51,6 +55,8 @@ type Deps struct {
 	Audit     *audit.Store
 	Webhooks  *webhook.Service
 	Messaging *messaging.Service
+	Hub       *realtime.Hub
+	Metrics   *metrics.Metrics
 }
 
 func NewHandler(d Deps) (*Handler, error) {
@@ -72,6 +78,8 @@ func NewHandler(d Deps) (*Handler, error) {
 		webhooks:    d.Webhooks,
 		messaging:   d.Messaging,
 		history:     d.Messaging.History(),
+		hub:         d.Hub,
+		metrics:     d.Metrics,
 	}, nil
 }
 
@@ -84,6 +92,9 @@ func (h *Handler) Router() http.Handler {
 		r.Use(middleware.RealIP)
 	}
 	r.Use(middleware.Recoverer)
+	if h.metrics != nil {
+		r.Use(h.metrics.Middleware)
+	}
 	r.Use(middleware.Logger)
 	r.Use(securityHeaders)
 	r.Use(cors(h.cfg.CORSOrigins))
@@ -91,6 +102,11 @@ func (h *Handler) Router() http.Handler {
 
 	r.Get("/health", h.Health)
 	r.Get("/ready", h.Ready)
+	if h.metrics != nil {
+		r.With(h.ipAllowlist, h.metricsAuth).Get("/metrics", h.Metrics)
+	}
+	// nginx proxies /ws straight to the backend (see frontend/nginx.conf).
+	r.With(h.ipAllowlist, h.authenticate, requireRole(auth.RoleViewer)).Get("/ws", h.WebSocket)
 
 	r.Get("/docs/*", httpSwagger.Handler(
 		httpSwagger.URL("/docs/doc.json"), //The url pointing to API definition
@@ -111,6 +127,8 @@ func (h *Handler) Router() http.Handler {
 				v.Get("/device", h.ListDevices)
 				v.Get("/device/{id}/status", h.GetStatus)
 				v.Get("/stats", h.GetStats)
+				v.Get("/ws", h.WebSocket)
+				v.Get("/sse", h.SSE)
 
 				v.Get("/webhooks", h.ListWebhooks)
 				v.Get("/webhooks/stats", h.DeliveryStats)

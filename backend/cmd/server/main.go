@@ -18,11 +18,14 @@ import (
 	redisinfra "github.com/user/whatsmeow-basileia/internal/infrastructure/redis"
 	"github.com/user/whatsmeow-basileia/internal/infrastructure/storage"
 	"github.com/user/whatsmeow-basileia/internal/infrastructure/whatsapp"
+	"github.com/user/whatsmeow-basileia/internal/metrics"
+	"github.com/user/whatsmeow-basileia/internal/realtime"
 	"github.com/user/whatsmeow-basileia/internal/service/messages"
 	"github.com/user/whatsmeow-basileia/internal/service/messaging"
 	"github.com/user/whatsmeow-basileia/internal/service/webhook"
 	"github.com/user/whatsmeow-basileia/pkg/config"
 	"github.com/user/whatsmeow-basileia/pkg/logger"
+	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/types/events"
 	"go.uber.org/zap"
 )
@@ -141,9 +144,29 @@ func main() {
 		ArchiveMedia:   cfg.MediaArchiveEnabled,
 	}, logger.Log)
 
+	// Realtime fan-out (WebSocket/SSE, across replicas through Redis) and metrics
+	hub := realtime.NewHub(redisClient)
+	hub.Start(ctx)
+	mtr := metrics.New(metrics.Sources{
+		Instances:   manager.ConnectedCount,
+		QueueDepth:  rmqClient.QueueDepth,
+		Queues:      []string{rabbitmq.QueueSendMessage, rabbitmq.QueueSendMedia, rabbitmq.QueueWebhookEvents, rabbitmq.QueueWebhookDelivery},
+		Subscribers: hub.Subscribers,
+	})
+	messagingService.SetObserver(mtr.ObserveSend)
+	webhookService.SetObserver(mtr.ObserveWebhook)
+
 	manager.SetHooks(whatsapp.Hooks{
-		Emit:      webhookService.Emit,
-		OnMessage: history.SaveIncoming,
+		Emit: func(ev whatsapp.OutboundEvent) {
+			webhookService.Emit(ev)
+			hub.Publish(ev)
+		},
+		OnMessage: func(instanceID string, client *whatsmeow.Client, evt *events.Message) {
+			if !evt.Info.IsFromMe {
+				mtr.IncInbound()
+			}
+			history.SaveIncoming(instanceID, client, evt)
+		},
 		OnEvent: func(instanceID string, evt interface{}) {
 			switch evt.(type) {
 			case *events.LabelEdit, *events.LabelAssociationChat:
@@ -212,6 +235,8 @@ func main() {
 		Audit:     auditStore,
 		Webhooks:  webhookService,
 		Messaging: messagingService,
+		Hub:       hub,
+		Metrics:   mtr,
 	})
 	if err != nil {
 		logger.Error("Invalid HTTP configuration", zap.Error(err))
