@@ -1,9 +1,8 @@
 services:
   app:
     build: ./backend
-    container_name: whatsmeow-app
-    ports:
-      - "8080:8080"
+    restart: unless-stopped
+    stop_grace_period: 30s
     env_file:
       - path: .env
         required: false
@@ -22,23 +21,20 @@ services:
       - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-securepassword}
       - MINIO_USE_SSL=false
       - MINIO_BUCKET=${MINIO_BUCKET:-whatsmeow-media}
-      # Public address used in presigned media links (leave empty to use the internal endpoint).
       - MINIO_PUBLIC_URL=${MINIO_PUBLIC_URL:-}
-      # Authentication: set ADMIN_API_KEY (>= 16 chars). If empty, one is generated on first
-      # boot and written to /app/data/.api-key. AUTH_REQUIRED=false restores the old open API.
       - AUTH_REQUIRED=${AUTH_REQUIRED:-true}
       - ADMIN_API_KEY=${ADMIN_API_KEY:-}
       - CORS_ORIGINS=${CORS_ORIGINS:-*}
       - RATE_LIMIT_PER_MINUTE=${RATE_LIMIT_PER_MINUTE:-600}
-      # Global fallback webhook (used when an instance has no webhook_url).
       - WEBHOOK_URL=${WEBHOOK_URL:-}
-      # HMAC secret used to sign webhook deliveries (X-Webhook-Signature).
       - WEBHOOK_SECRET=${WEBHOOK_SECRET:-}
       - WEBHOOK_MAX_ATTEMPTS=${WEBHOOK_MAX_ATTEMPTS:-8}
-      - MEDIA_ARCHIVE_ENABLED=${MEDIA_ARCHIVE_ENABLED:-false}
+      - MEDIA_ARCHIVE_ENABLED=${MEDIA_ARCHIVE_ENABLED:-true}
       - MESSAGE_RETENTION_DAYS=${MESSAGE_RETENTION_DAYS:-0}
-      - SEND_PACING_ENABLED=${SEND_PACING_ENABLED:-false}
+      - SEND_PACING_ENABLED=${SEND_PACING_ENABLED:-true}
       - SIMULATE_TYPING=${SIMULATE_TYPING:-false}
+    expose:
+      - "8080"
     volumes:
       - app_data:/app/data
     depends_on:
@@ -56,28 +52,29 @@ services:
       timeout: 5s
       start_period: 30s
       retries: 3
-    restart: unless-stopped
-    stop_grace_period: 30s
     networks:
       - whatsmeow-net
+
   frontend:
     build: ./frontend
-    container_name: whatsmeow-frontend
+    restart: unless-stopped
+    expose:
+      - "80"
     ports:
-      - "3179:80" # apiwp.nandus.com.br
-      - "8179:80" # apiwpb.nandus.com.br
+      # Apenas amarrado a localhost para acesso direto opcional.
+      # No Easypanel, aponte o domínio para a porta 80 do serviço frontend.
+      - "127.0.0.1:${PORT_FRONTEND:-3179}:80"
     depends_on:
       - app
-    restart: unless-stopped
     networks:
       - whatsmeow-net
 
   redis:
     image: redis:7-alpine
-    container_name: whatsmeow-redis
+    restart: unless-stopped
     command: [ "redis-server", "--appendonly", "yes" ]
-    ports:
-      - "16379:6379"
+    expose:
+      - "6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -85,22 +82,20 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    restart: unless-stopped
     networks:
       - whatsmeow-net
 
   rabbitmq:
     image: rabbitmq:3.13-management-alpine
-    container_name: whatsmeow-rabbitmq
+    restart: unless-stopped
     environment:
       - RABBITMQ_DEFAULT_USER=whatsmeow
       - RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASSWORD:-securepassword}
-    ports:
-      - "5675:5672" # Mensageria AMQP
-      - "15675:15672" # Painel Management
+    expose:
+      - "5672"
+      - "15672"
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
-    restart: unless-stopped
     healthcheck:
       test: rabbitmq-diagnostics -q ping
       interval: 10s
@@ -111,17 +106,16 @@ services:
 
   minio:
     image: minio/minio:latest
-    container_name: whatsmeow-minio
+    restart: unless-stopped
     environment:
       - MINIO_ROOT_USER=${MINIO_ROOT_USER:-whatsmeowAdmin}
       - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-securepassword}
     command: server /data --console-address ":9001"
-    ports:
-      - "19000:9000" # API S3
-      - "19001:9001" # Web Console
+    expose:
+      - "9000"
+      - "9001"
     volumes:
       - minio_data:/data
-    restart: unless-stopped
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
       interval: 30s
@@ -129,25 +123,25 @@ services:
       retries: 3
     networks:
       - whatsmeow-net
+
   postgres:
     image: postgres:15-alpine
-    container_name: whatsmeow-postgres
+    restart: unless-stopped
     environment:
       - POSTGRES_USER=whatsmeow
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-securepassword}
       - POSTGRES_DB=whatsmeow
+    expose:
+      - "5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5234:5432"
-    networks:
-      - whatsmeow-net
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U whatsmeow" ]
       interval: 10s
       timeout: 5s
       retries: 5
-    restart: unless-stopped
+    networks:
+      - whatsmeow-net
 
 networks:
   whatsmeow-net:
