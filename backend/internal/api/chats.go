@@ -72,7 +72,7 @@ func (h *Handler) UazChatBlock(w http.ResponseWriter, r *http.Request) {
 	if in.Block {
 		action = events.BlocklistChangeActionBlock
 	}
-	list, err := client.UpdateBlocklist(r.Context(), jid, action)
+	list, err := client.UpdateBlocklist(r.Context(), jid, action, "")
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
@@ -92,7 +92,7 @@ func (h *Handler) UazChatBlocklist(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	list, err := client.GetBlocklist(r.Context())
+	list, err := client.GetBlocklist(r.Context(), "")
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return

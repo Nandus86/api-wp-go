@@ -26,6 +26,7 @@ import (
 	"github.com/user/whatsmeow-basileia/pkg/config"
 	"github.com/user/whatsmeow-basileia/pkg/logger"
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/types/events"
 	"go.uber.org/zap"
 )
@@ -44,7 +45,19 @@ func main() {
 		os.Exit(1)
 	}
 
-	logger.Info("Starting WhatsMeow Basileia Service...", zap.String("port", cfg.HTTPPort), zap.String("version", api.Version))
+	logger.Info("Starting WhatsMeow Basileia Service...", zap.String("port", cfg.HTTPPort), zap.String("version", api.Version), zap.String("wa_version", store.GetWAVersion().String()))
+
+	// Fetch latest WhatsApp Web version dynamically in background
+	go func() {
+		fetchCtx, fetchCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer fetchCancel()
+		if latestVer, err := whatsmeow.GetLatestVersion(fetchCtx, nil); err == nil && latestVer != nil {
+			logger.Info("Updated WhatsApp web client version dynamically", zap.String("version", latestVer.String()))
+			store.SetWAVersion(*latestVer)
+		} else if err != nil {
+			logger.Debug("Could not fetch latest WhatsApp web version dynamically, using embedded version", zap.Error(err), zap.String("version", store.GetWAVersion().String()))
+		}
+	}()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
